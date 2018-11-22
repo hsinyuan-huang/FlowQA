@@ -89,19 +89,19 @@ class FlowQA(nn.Module):
         num_layers=2, concat_rnn=opt['concat_rnn'], add_feat=CoVe_size)
 
         # Output sizes of rnn encoders
-        print('After Input LSTM, the vector_sizes [doc, query] are [', doc_hidden_size, que_hidden_size, '] *', opt['in_rnn_layers'])
+        print('After Input LSTM, the vector_sizes [doc, query] are [', doc_hidden_size, que_hidden_size, '] * 2')
 
         # Deep inter-attention
-        self.deep_attn = layers.DeepAttention(opt, abstr_list_cnt=opt['in_rnn_layers'], deep_att_hidden_size_per_abstr=opt['deep_att_hidden_size_per_abstr'], do_similarity=opt['deep_inter_att_do_similar'], word_hidden_size=embedding_dim+CoVe_size, no_rnn=True)
+        self.deep_attn = layers.DeepAttention(opt, abstr_list_cnt=2, deep_att_hidden_size_per_abstr=opt['deep_att_hidden_size_per_abstr'], do_similarity=opt['deep_inter_att_do_similar'], word_hidden_size=embedding_dim+CoVe_size, no_rnn=True)
 
         self.deep_attn_rnn, doc_hidden_size = layers.RNN_from_opt(self.deep_attn.att_final_size + flow_size, opt['hidden_size'], opt, num_layers=1)
         self.dialog_flow3 = layers.StackedBRNN(doc_hidden_size, opt['hidden_size'], num_layers=1, rnn_type=nn.GRU, bidir=False)
 
         # Question understanding and compression
-        self.high_lvl_qrnn, que_hidden_size = layers.RNN_from_opt(que_hidden_size * opt['in_rnn_layers'], opt['hidden_size'], opt, num_layers = 1, concat_rnn = True)
+        self.high_lvl_qrnn, que_hidden_size = layers.RNN_from_opt(que_hidden_size * 2, opt['hidden_size'], opt, num_layers = 1, concat_rnn = True)
 
         # Self attention on context
-        att_size = doc_hidden_size + opt['in_rnn_layers'] * opt['hidden_size'] * 2
+        att_size = doc_hidden_size + 2 * opt['hidden_size'] * 2
 
         if opt['self_attention_opt'] > 0:
             self.highlvl_self_att = layers.GetAttentionHiddens(att_size, opt['deep_att_hidden_size_per_abstr'])
@@ -274,10 +274,9 @@ class FlowQA(nn.Module):
 
         doc_abstr_ls.append(doc_hiddens)
 
-        if self.opt['in_rnn_layers'] >= 2:
-            doc_hiddens = self.doc_rnn2(torch.cat((doc_hiddens, doc_hiddens_flow, x1_cove_high_expand), dim=2), x1_mask)
-            doc_hiddens_flow = flow_operation(doc_hiddens, self.dialog_flow2)
-            doc_abstr_ls.append(doc_hiddens)
+        doc_hiddens = self.doc_rnn2(torch.cat((doc_hiddens, doc_hiddens_flow, x1_cove_high_expand), dim=2), x1_mask)
+        doc_hiddens_flow = flow_operation(doc_hiddens, self.dialog_flow2)
+        doc_abstr_ls.append(doc_hiddens)
 
         #with open('flow_bef_att.pkl', 'wb') as output:
         #    pickle.dump(doc_hiddens_flow, output, pickle.HIGHEST_PROTOCOL)

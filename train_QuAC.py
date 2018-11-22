@@ -211,7 +211,7 @@ def main():
                 log.info('updates[{0:6}] train loss[{1:.5f}] remaining[{2}]'.format(
                     model.updates, model.train_loss.avg,
                     str((datetime.now() - start) / (i + 1) * (len(batches) - i - 1)).split('.')[0]))
-
+        
         # eval
         if epoch % args.eval_per_epoch == 0:
             batches = BatchGen_QuAC(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_dialog_act=args.use_dialog_act, precompute_elmo=args.elmo_batch_size // args.batch_size)

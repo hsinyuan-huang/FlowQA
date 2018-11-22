@@ -306,11 +306,11 @@ class DeepAttention(nn.Module):
         for i in range(abstr_list_cnt+1):
             self.int_attn_list.append(GetAttentionHiddens(att_size, deep_att_hidden_size_per_abstr, similarity_attention=do_similarity))
 
-        rnn_input_size = abstr_hidden_size * abstr_list_cnt * 2 + (opt['highlvl_hidden_size'] * 2)
+        rnn_input_size = abstr_hidden_size * abstr_list_cnt * 2 + (opt['hidden_size'] * 2)
 
         self.att_final_size = rnn_input_size
         if not self.no_rnn:
-            self.rnn, self.output_size = RNN_from_opt(rnn_input_size, opt['highlvl_hidden_size'], opt, num_layers=1, dialog_flow=dialog_flow)
+            self.rnn, self.output_size = RNN_from_opt(rnn_input_size, opt['hidden_size'], opt, num_layers=1, dialog_flow=dialog_flow)
         #print('Deep attention x {}: Each with {} rays in {}-dim space'.format(abstr_list_cnt, deep_att_hidden_size_per_abstr, att_size))
         #print('Deep attention RNN input {} -> output {}'.format(self.rnn_input_size, self.output_size))
 
