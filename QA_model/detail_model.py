@@ -212,7 +212,7 @@ class FlowQA(nn.Module):
         if self.opt['use_elmo']:
             if not precomputed_elmo:
                 x1_elmo = self.elmo(x1_c)['elmo_representations'][0]#torch.zeros(x1_emb.size(0), x1_emb.size(1), 1024, dtype=x1_emb.dtype, layout=x1_emb.layout, device=x1_emb.device)
-            x2_elmo = self.elmo(x2_c)['elmo_representations'][0]#torch.zeros(x2_emb.size(0), x2_emb.size(1), 1024, dtype=x2_emb.dtype, layout=x2_emb.layout, device=x2_emb.device)
+                x2_elmo = self.elmo(x2_c)['elmo_representations'][0]#torch.zeros(x2_emb.size(0), x2_emb.size(1), 1024, dtype=x2_emb.dtype, layout=x2_emb.layout, device=x2_emb.device)
             # Dropout on contexualized embeddings
             if self.opt['dropout_emb'] > 0:
                 x1_elmo = layers.dropout(x1_elmo, p=self.opt['dropout_emb'], training=self.training)
