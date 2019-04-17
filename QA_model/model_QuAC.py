@@ -46,6 +46,8 @@ class QAModel(object):
                                           weight_decay=opt['weight_decay'])
         elif opt['optimizer'] == 'adadelta':
             self.optimizer = optim.Adadelta(parameters, rho=0.95, weight_decay=opt['weight_decay'])
+        elif opt['optimizer'] == 'adam':
+            self.optimizer = optim.Adam(parameters, lr=2e-3, amsgrad=True, weight_decay=opt['weight_decay'])
         else:
             raise RuntimeError('Unsupported optimizer: %s' % opt['optimizer'])
         if state_dict:
