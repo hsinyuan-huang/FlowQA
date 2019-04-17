@@ -60,6 +60,7 @@ def proc_train(ith, article):
     for paragraph in article['paragraphs']:
         context = paragraph['context']
         for qa in paragraph['qas']:
+            qid = qa['id']
             question = qa['question']
             answers = qa['orig_answer']
             
@@ -81,12 +82,12 @@ def proc_train(ith, article):
                                        2)
             else:
                 answer_start, answer_end = -1, -1
-            rows.append((ith, question, answer, answer_start, answer_end, answer_choice))
+            rows.append((ith, question, answer, answer_start, answer_end, answer_choice, qid))
     return rows, context
 
 train, train_context = flatten_json(trn_file, proc_train)
 train = pd.DataFrame(train, columns=['context_idx', 'question', 'answer',
-                                    'answer_start', 'answer_end', 'answer_choice'])
+                                    'answer_start', 'answer_end', 'answer_choice', 'qid'])
 log.info('train json data flattened.')
 
 print(train)
@@ -179,6 +180,7 @@ for i, CID in enumerate(train.context_idx):
     prev_CID = CID
 
 result = {
+    'qids': train.qid.tolist(),
     'question_ids': trQ_ids,
     'context_ids': trC_ids,
     'context_features': trC_features, # exact match, tf
@@ -211,6 +213,7 @@ def proc_dev(ith, article):
     for paragraph in article['paragraphs']:
         context = paragraph['context']
         for qa in paragraph['qas']:
+            qid = qa['id']
             question = qa['question']
             answers = qa['orig_answer']
             
@@ -237,12 +240,12 @@ def proc_dev(ith, article):
             for ans in qa['answers']:
                 ans_ls.append(ans['text'])
             
-            rows.append((ith, question, answer, answer_start, answer_end, answer_choice, ans_ls))
+            rows.append((ith, question, answer, answer_start, answer_end, answer_choice, ans_ls, qid))
     return rows, context
 
 dev, dev_context = flatten_json(dev_file, proc_dev)
 dev = pd.DataFrame(dev, columns=['context_idx', 'question', 'answer',
-                                 'answer_start', 'answer_end', 'answer_choice', 'all_answer'])
+                                 'answer_start', 'answer_end', 'answer_choice', 'all_answer', 'qid'])
 log.info('dev json data flattened.')
 
 print(dev)
@@ -320,6 +323,7 @@ for i, CID in enumerate(dev.context_idx):
     prev_CID = CID
 
 result = {
+    'qids': dev.qid.tolist(),
     'question_ids': devQ_ids,
     'context_ids': devC_ids,
     'context_features': devC_features, # exact match, tf
