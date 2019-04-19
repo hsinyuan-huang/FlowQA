@@ -10,6 +10,8 @@ import collections
 import multiprocessing
 import logging
 import random
+import torch
+from pytorch_pretrained_bert import BertTokenizer
 from allennlp.modules.elmo import batch_to_ids
 from general_utils import flatten_json, normalize_text, build_embedding, load_glove_vocab, pre_proc, get_context_span, find_answer_span, feature_gen, token2id
 
@@ -25,13 +27,18 @@ parser.add_argument('--sort_all', action='store_true',
                          'Otherwise consider question words first.')
 parser.add_argument('--threads', type=int, default=multiprocessing.cpu_count(),
                     help='number of threads for preprocessing.')
+parser.add_argument('--use_bert', type=int, default=1,
+                    help='pass 1 to save preprocessed indices for bert tokens')
 parser.add_argument('--no_match', action='store_true',
                     help='do not extract the three exact matching features.')
 parser.add_argument('--seed', type=int, default=1023,
                     help='random seed for data shuffling, embedding init, etc.')
 
+BERT_MAXLEN = 512
 
 args = parser.parse_args()
+if args.use_bert:
+    bertTokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 trn_file = 'QuAC_data/train.json'
 dev_file = 'QuAC_data/dev.json'
 wv_file = args.wv_file
@@ -55,13 +62,24 @@ log.info('glove loaded.')
 #===============================================================
 
 def proc_train(ith, article):
+    global args, bertTokenizer, BERT_MAXLEN
     rows = []
     
     for paragraph in article['paragraphs']:
         context = paragraph['context']
+        if args.use_bert:
+            tokenized_context = bertTokenizer.tokenize(context)
+            context_bertidx = []
+            while tokenized_context:
+                temp = bertTokenizer.convert_tokens_to_ids(tokenized_context[:BERT_MAXLEN])
+                context_bertidx.extend(temp)
+                tokenized_context = tokenized_context[BERT_MAXLEN:]
         for qa in paragraph['qas']:
             qid = qa['id']
             question = qa['question']
+            if args.use_bert:
+                tokenized_question = bertTokenizer.tokenize(question)
+                question_bertidx = bertTokenizer.convert_tokens_to_ids(tokenized_question)
             answers = qa['orig_answer']
             
             answer = answers['text']
@@ -82,12 +100,25 @@ def proc_train(ith, article):
                                        2)
             else:
                 answer_start, answer_end = -1, -1
-            rows.append((ith, question, answer, answer_start, answer_end, answer_choice, qid))
-    return rows, context
+            if args.use_bert:
+                rows.append((ith, question, answer, answer_start, answer_end, answer_choice, qid, question_bertidx))
+            else:
+                rows.append((ith, question, answer, answer_start, answer_end, answer_choice, qid))
 
-train, train_context = flatten_json(trn_file, proc_train)
-train = pd.DataFrame(train, columns=['context_idx', 'question', 'answer',
+    if args.use_bert:
+        return rows, context, context_bertidx
+    else:
+        return rows, context
+
+if args.use_bert:
+    train, train_context, train_context_bertidx = flatten_json(trn_file, proc_train, args.use_bert)
+    train = pd.DataFrame(train, columns=['context_idx', 'question', 'answer', 'answer_start',
+                                         'answer_end', 'answer_choice', 'qid', 'question_bertidx'])
+else:
+    train, train_context = flatten_json(trn_file, proc_train, args.use_bert)
+    train = pd.DataFrame(train, columns=['context_idx', 'question', 'answer',
                                     'answer_start', 'answer_end', 'answer_choice', 'qid'])
+
 log.info('train json data flattened.')
 
 print(train)
@@ -179,25 +210,48 @@ for i, CID in enumerate(train.context_idx):
         first_question.append(i)
     prev_CID = CID
 
-result = {
-    'qids': train.qid.tolist(),
-    'question_ids': trQ_ids,
-    'context_ids': trC_ids,
-    'context_features': trC_features, # exact match, tf
-    'context_tags': trC_tag_ids, # POS tagging
-    'context_ents': trC_ent_ids, # Entity recognition
-    'context': train_context,
-    'context_span': train_context_span,
-    '1st_question': first_question,
-    'question_CID': train.context_idx.tolist(),
-    'question': train.question.tolist(),
-    'answer': train.answer.tolist(),
-    'answer_start': train.answer_start_token.tolist(),
-    'answer_end': train.answer_end_token.tolist(),
-    'answer_choice': train.answer_choice.tolist(),
-    'context_tokenized': trC_tokens,
-    'question_tokenized': trQ_tokens
-}
+if args.use_bert:
+    result = {
+        'qids': train.qid.tolist(),
+        'question_ids': trQ_ids,
+        'context_ids': trC_ids,
+        'context_features': trC_features, # exact match, tf
+        'context_tags': trC_tag_ids, # POS tagging
+        'context_ents': trC_ent_ids, # Entity recognition
+        'context': train_context,
+        'context_span': train_context_span,
+        '1st_question': first_question,
+        'question_CID': train.context_idx.tolist(),
+        'question': train.question.tolist(),
+        'answer': train.answer.tolist(),
+        'answer_start': train.answer_start_token.tolist(),
+        'answer_end': train.answer_end_token.tolist(),
+        'answer_choice': train.answer_choice.tolist(),
+        'context_tokenized': trC_tokens,
+        'question_tokenized': trQ_tokens,
+        'context_bertidx': train_context_bertidx,
+        'question_bertidx': train.question_bertidx.tolist()
+    }
+else:
+    result = {
+        'qids': train.qid.tolist(),
+        'question_ids': trQ_ids,
+        'context_ids': trC_ids,
+        'context_features': trC_features, # exact match, tf
+        'context_tags': trC_tag_ids, # POS tagging
+        'context_ents': trC_ent_ids, # Entity recognition
+        'context': train_context,
+        'context_span': train_context_span,
+        '1st_question': first_question,
+        'question_CID': train.context_idx.tolist(),
+        'question': train.question.tolist(),
+        'answer': train.answer.tolist(),
+        'answer_start': train.answer_start_token.tolist(),
+        'answer_end': train.answer_end_token.tolist(),
+        'answer_choice': train.answer_choice.tolist(),
+        'context_tokenized': trC_tokens,
+        'question_tokenized': trQ_tokens
+    }
 with open('QuAC_data/train_data.msgpack', 'wb') as f:
     msgpack.dump(result, f)
 
@@ -208,13 +262,24 @@ log.info('saved training to disk.')
 #==========================================================
 
 def proc_dev(ith, article):
+    global args, bertTokenizer, BERT_MAXLEN
     rows = []
     
     for paragraph in article['paragraphs']:
         context = paragraph['context']
+        if args.use_bert:
+            tokenized_context = bertTokenizer.tokenize(context)
+            context_bertidx = []
+            while tokenized_context:
+                temp = bertTokenizer.convert_tokens_to_ids(tokenized_context[:BERT_MAXLEN])
+                context_bertidx.extend(temp)
+                tokenized_context = tokenized_context[BERT_MAXLEN:]
         for qa in paragraph['qas']:
             qid = qa['id']
             question = qa['question']
+            if args.use_bert:
+                tokenized_question = bertTokenizer.tokenize(question)
+                question_bertidx = bertTokenizer.convert_tokens_to_ids(tokenized_question)
             answers = qa['orig_answer']
             
             answer = answers['text']
@@ -240,12 +305,24 @@ def proc_dev(ith, article):
             for ans in qa['answers']:
                 ans_ls.append(ans['text'])
             
-            rows.append((ith, question, answer, answer_start, answer_end, answer_choice, ans_ls, qid))
-    return rows, context
+            if args.use_bert:
+                rows.append((ith, question, answer, answer_start, answer_end, answer_choice, ans_ls, qid, question_bertidx))
+            else:
+                rows.append((ith, question, answer, answer_start, answer_end, answer_choice, ans_ls, qid))
 
-dev, dev_context = flatten_json(dev_file, proc_dev)
-dev = pd.DataFrame(dev, columns=['context_idx', 'question', 'answer',
-                                 'answer_start', 'answer_end', 'answer_choice', 'all_answer', 'qid'])
+    if args.use_bert:
+        return rows, context, context_bertidx
+    else:
+        return rows, context
+
+if args.use_bert:
+    dev, dev_context, dev_context_bertidx = flatten_json(dev_file, proc_dev)
+    dev = pd.DataFrame(dev, columns=['context_idx', 'question', 'answer',
+                                     'answer_start', 'answer_end', 'answer_choice', 'all_answer', 'qid', 'question_bertidx'])
+else:
+    dev, dev_context = flatten_json(dev_file, proc_dev)
+    dev = pd.DataFrame(dev, columns=['context_idx', 'question', 'answer',
+                                     'answer_start', 'answer_end', 'answer_choice', 'all_answer', 'qid'])
 log.info('dev json data flattened.')
 
 print(dev)
@@ -322,26 +399,50 @@ for i, CID in enumerate(dev.context_idx):
         first_question.append(i)
     prev_CID = CID
 
-result = {
-    'qids': dev.qid.tolist(),
-    'question_ids': devQ_ids,
-    'context_ids': devC_ids,
-    'context_features': devC_features, # exact match, tf
-    'context_tags': devC_tag_ids, # POS tagging
-    'context_ents': devC_ent_ids, # Entity recognition
-    'context': dev_context,
-    'context_span': dev_context_span,
-    '1st_question': first_question,
-    'question_CID': dev.context_idx.tolist(),
-    'question': dev.question.tolist(),
-    'answer': dev.answer.tolist(),
-    'answer_start': dev.answer_start_token.tolist(),
-    'answer_end': dev.answer_end_token.tolist(),
-    'answer_choice': dev.answer_choice.tolist(),
-    'all_answer': dev.all_answer.tolist(),
-    'context_tokenized': devC_tokens,
-    'question_tokenized': devQ_tokens
-}
+if args.use_bert:
+    result = {
+        'qids': dev.qid.tolist(),
+        'question_ids': devQ_ids,
+        'context_ids': devC_ids,
+        'context_features': devC_features, # exact match, tf
+        'context_tags': devC_tag_ids, # POS tagging
+        'context_ents': devC_ent_ids, # Entity recognition
+        'context': dev_context,
+        'context_span': dev_context_span,
+        '1st_question': first_question,
+        'question_CID': dev.context_idx.tolist(),
+        'question': dev.question.tolist(),
+        'answer': dev.answer.tolist(),
+        'answer_start': dev.answer_start_token.tolist(),
+        'answer_end': dev.answer_end_token.tolist(),
+        'answer_choice': dev.answer_choice.tolist(),
+        'all_answer': dev.all_answer.tolist(),
+        'context_tokenized': devC_tokens,
+        'question_tokenized': devQ_tokens,
+        'context_bertidx': dev_context_bertidx,
+        'question_bertidx': dev.question_bertidx.tolist()
+    }
+else:
+    result = {
+        'qids': dev.qid.tolist(),
+        'question_ids': devQ_ids,
+        'context_ids': devC_ids,
+        'context_features': devC_features, # exact match, tf
+        'context_tags': devC_tag_ids, # POS tagging
+        'context_ents': devC_ent_ids, # Entity recognition
+        'context': dev_context,
+        'context_span': dev_context_span,
+        '1st_question': first_question,
+        'question_CID': dev.context_idx.tolist(),
+        'question': dev.question.tolist(),
+        'answer': dev.answer.tolist(),
+        'answer_start': dev.answer_start_token.tolist(),
+        'answer_end': dev.answer_end_token.tolist(),
+        'answer_choice': dev.answer_choice.tolist(),
+        'all_answer': dev.all_answer.tolist(),
+        'context_tokenized': devC_tokens,
+        'question_tokenized': devQ_tokens
+    }
 with open('QuAC_data/dev_data.msgpack', 'wb') as f:
     msgpack.dump(result, f)
 
