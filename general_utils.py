@@ -487,7 +487,7 @@ class BatchGen_QuAC:
                     if self.use_bert:
                         # Bert uses 0 for padding
                         question_bertidx.append(torch.Tensor([0, 0]).long())
-                        question_bert_spans.append([0, 1])
+                        question_bert_spans.append([[0], [1]])
 
             question_cid = batch_to_ids(question_tokens)
 
@@ -563,7 +563,7 @@ class BatchGen_QuAC:
                 yield (context_id, context_cid, context_feature, context_tag, context_ent, context_mask,
                        question_id, question_cid, question_mask, overall_mask,
                        answer_s, answer_e, answer_c,
-                       text, span, question, answer, context_bertidx, context_bert_spans, question_bertidx, context_bert_spans)
+                       text, span, question, answer, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans)
             else:
                 yield (context_id, context_cid, context_feature, context_tag, context_ent, context_mask,
                        question_id, question_cid, question_mask, overall_mask,

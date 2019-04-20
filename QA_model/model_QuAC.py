@@ -62,6 +62,12 @@ class QAModel(object):
         self.network.train()
         torch.set_grad_enabled(True)
 
+        if self.opt['use_bert']:
+            context_bertidx = batch[17]
+            context_bert_spans = batch[18]
+            question_bertidx = batch[19]
+            question_bert_spans = batch[20]
+
         # Transfer to GPU
         if self.opt['cuda']:
             inputs = [e.cuda(non_blocking=True) for e in batch[:9]]
@@ -70,6 +76,9 @@ class QAModel(object):
             answer_s = batch[10].cuda(non_blocking=True)
             answer_e = batch[11].cuda(non_blocking=True)
             answer_c = batch[12].cuda(non_blocking=True)
+
+            if self.opt['use_bert']:
+                context_bertidx = [x.cuda(non_blocking=True) for x in context_bertidx]
         else:
             inputs = [e for e in batch[:9]]
             overall_mask = batch[9]
@@ -80,7 +89,10 @@ class QAModel(object):
 
         # Run forward
         # output: [batch_size, question_num, context_len], [batch_size, question_num]
-        score_s, score_e, score_no_answ = self.network(*inputs)
+        if self.opt['use_bert']:
+            score_s, score_e, score_no_answ = self.network(*inputs, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans)
+        else:
+            score_s, score_e, score_no_answ = self.network(*inputs)
 
         # Compute loss and accuracies
         if self.opt['use_elmo']:

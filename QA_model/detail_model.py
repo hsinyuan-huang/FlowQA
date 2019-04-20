@@ -5,11 +5,17 @@ import torch.nn.functional as F
 from allennlp.modules.elmo import Elmo
 from allennlp.nn.util import remove_sentence_boundaries
 from . import layers
+from . import constants
+from pytorch_pretrained_bert import BertModel
 
 class FlowQA(nn.Module):
     """Network for the FlowQA Module."""
     def __init__(self, opt, embedding=None, padding_idx=0):
         super(FlowQA, self).__init__()
+        if opt['use_bert'] and opt['use_elmo']:
+            print('#' * 100)
+            print(' ' * 10, "You are using both BERT and ELMo")
+            print('#' * 100)
 
         # Input size to RNN: word emb + char emb + question emb + manual features
         doc_input_size = 0
@@ -48,6 +54,22 @@ class FlowQA(nn.Module):
             CoVe_size = self.CoVe.output_size
             doc_input_size += CoVe_size
             que_input_size += CoVe_size
+        if opt['use_bert']:
+            self.bert = BertModel.from_pretrained(opt['bert_type'])
+            self.finetune_bert = True if opt['finetune_bert'] else False
+
+            if not self.finetune_bert:
+                self.bert.eval()
+                for layer in self.bert.parameters():
+                    layer.requires_grad = False
+
+            with torch.no_grad():
+                allout, pooledout = self.bert(torch.Tensor([[0]]).long())
+                doc_input_size += pooledout.shape[1]
+                que_input_size += pooledout.shape[1]
+
+            if opt['cuda']:
+                self.bert = self.bert.cuda()
 
         if opt['use_elmo']:
             options_file = "https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x4096_512_2048cnn_2xhighway_5.5B/elmo_2x4096_512_2048cnn_2xhighway_5.5B_options.json"
@@ -127,7 +149,21 @@ class FlowQA(nn.Module):
         # Store config
         self.opt = opt
 
-    def forward(self, x1, x1_c, x1_f, x1_pos, x1_ner, x1_mask, x2_full, x2_c, x2_full_mask):
+    def bert_emb(self, tensor):
+        length = tensor.shape[1]
+        bertemb = []
+        for i in range((length + constants.BERT_MAXLEN - 1) // constants.BERT_MAXLEN):
+            bertemb.append(self.bert(tensor[:, i * constants.BERT_MAXLEN : (i + 1) * constants.BERT_MAXLEN], output_all_encoded_layers=False)[0])
+        bertemb = torch.cat(bertemb, dim=1)
+        return bertemb
+
+    def combine_bert_emb(self, emb, span):
+        final_emb = []
+        for s in span:
+            final_emb.append(emb[s].mean(dim=0, keepdim=True))
+        return torch.cat(final_emb, dim=0)
+
+    def forward(self, x1, x1_c, x1_f, x1_pos, x1_ner, x1_mask, x2_full, x2_c, x2_full_mask, context_bertidx=None, context_bert_spans=None, question_bertidx=None, question_bert_spans=None):
         """Inputs:
         x1 = document word indices             [batch * len_d]
         x1_c = document char indices           [batch * len_d * len_w] or [1]
@@ -182,6 +218,31 @@ class FlowQA(nn.Module):
 
         x2 = x2_full.view(-1, x2_full.size(-1))
         x2_mask = x2_full_mask.view(-1, x2_full.size(-1))
+
+        if self.opt['use_bert']:
+            #  Context BERT
+            #  0 is '[PAD]' for bert
+            padded_contexts_bertidx = nn.utils.rnn.pad_sequence(context_bertidx, batch_first=True)
+            inter_context_bert_emb = self.bert_emb(padded_contexts_bertidx)
+            context_bert_emb = []
+            for i in range(inter_context_bert_emb.shape[0]):
+                context_bert_emb.append(self.combine_bert_emb(inter_context_bert_emb[i], context_bert_spans[i]))
+            context_bert_emb = nn.utils.rnn.pad_sequence(context_bert_emb, batch_first=True)
+
+            # Question BERT
+            if self.opt['cuda']:
+                padded_ques_bertidx = nn.utils.rnn.pad_sequence(question_bertidx, batch_first=True).cuda()
+            else:
+                padded_ques_bertidx = nn.utils.rnn.pad_sequence(question_bertidx, batch_first=True)
+
+            inter_ques_bert_emb = self.bert_emb(padded_ques_bertidx)
+            ques_bert_emb = []
+            for i in range(inter_ques_bert_emb.shape[0]):
+                ques_bert_emb.append(self.combine_bert_emb(inter_ques_bert_emb[i], question_bert_spans[i]))
+            ques_bert_emb = nn.utils.rnn.pad_sequence(ques_bert_emb, batch_first=True)
+
+            drnn_input_list.append(context_bert_emb)
+            qrnn_input_list.append(ques_bert_emb)
 
         if self.opt['use_wemb']:
             # Word embedding for both document and question
