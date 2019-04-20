@@ -1,0 +1,1 @@
+BERT_MAXLEN = 512
