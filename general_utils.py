@@ -489,6 +489,8 @@ class BatchGen_QuAC:
                         question_bertidx.append(torch.Tensor([0, 0]).long())
                         question_bert_spans.append([0, 1])
 
+            question_cid = batch_to_ids(question_tokens)
+
             # Process Context-Question Features
             feature_len = len(qa_data[0][2][0])
             context_feature = torch.Tensor(batch_size, question_num, context_len, feature_len + (self.dialog_ctx * (self.use_dialog_act*3+2))).fill_(0)
