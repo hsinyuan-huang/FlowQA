@@ -29,6 +29,7 @@ parser.add_argument('--threads', type=int, default=multiprocessing.cpu_count(),
                     help='number of threads for preprocessing.')
 parser.add_argument('--use_bert', type=int, default=1,
                     help='pass 1 to save preprocessed indices for bert tokens')
+parser.add_argument('--bert_type', type=str, default='bert-base-uncased')
 parser.add_argument('--no_match', action='store_true',
                     help='do not extract the three exact matching features.')
 parser.add_argument('--seed', type=int, default=1023,
@@ -38,7 +39,7 @@ BERT_MAXLEN = 512
 
 args = parser.parse_args()
 if args.use_bert:
-    bertTokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    bertTokenizer = BertTokenizer.from_pretrained(args.bert_type)
 trn_file = 'QuAC_data/train.json'
 dev_file = 'QuAC_data/dev.json'
 wv_file = args.wv_file
