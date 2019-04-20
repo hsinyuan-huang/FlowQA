@@ -15,6 +15,7 @@ import json
 import numpy as np
 import pandas as pd
 from allennlp.modules.elmo import batch_to_ids
+from QA_model import constants
 
 #===========================================================================
 #================= All for preprocessing SQuAD data set ====================
@@ -202,177 +203,177 @@ def token2id(docs, vocab, unk_id=None):
 #================ For batch generation (train & predict) ===================
 #===========================================================================
 
-class BatchGen_CoQA:
-    def __init__(self, data, batch_size, gpu, dialog_ctx=0, evaluation=False, context_maxlen=100000, precompute_elmo=0):
-        '''
-        input:
-            data - see train.py
-            batch_size - int
-        '''
-        self.dialog_ctx = dialog_ctx
-        self.batch_size = batch_size
-        self.context_maxlen = context_maxlen
-        self.precompute_elmo = precompute_elmo
-
-        self.eval = evaluation
-        self.gpu = gpu
-
-        self.context_num = len(data['context'])
-        self.question_num = len(data['qa'])
-        self.data = data
-
-    def __len__(self):
-        return (self.context_num + self.batch_size - 1) // self.batch_size
-
-    def __iter__(self):
-        # Random permutation for the context
-        idx_perm = range(0, self.context_num)
-        if not self.eval:
-            idx_perm = np.random.permutation(idx_perm)
-
-        batch_size = self.batch_size
-        for batch_i in range((self.context_num + self.batch_size - 1) // self.batch_size):
-
-            batch_idx = idx_perm[self.batch_size * batch_i: self.batch_size * (batch_i+1)]
-
-            context_batch = [self.data['context'][i] for i in batch_idx]
-            batch_size = len(context_batch)
-
-            context_batch = list(zip(*context_batch))
-
-            # Process Context Tokens
-            context_len = max(len(x) for x in context_batch[0])
-            if not self.eval:
-                context_len = min(context_len, self.context_maxlen)
-            context_id = torch.LongTensor(batch_size, context_len).fill_(0)
-            for i, doc in enumerate(context_batch[0]):
-                select_len = min(len(doc), context_len)
-                context_id[i, :select_len] = torch.LongTensor(doc[:select_len])
-
-            # Process Context POS Tags
-            context_tag = torch.LongTensor(batch_size, context_len).fill_(0)
-            for i, doc in enumerate(context_batch[1]):
-                select_len = min(len(doc), context_len)
-                context_tag[i, :select_len] = torch.LongTensor(doc[:select_len])
-
-            # Process Context Named Entity
-            context_ent = torch.LongTensor(batch_size, context_len).fill_(0)
-            for i, doc in enumerate(context_batch[2]):
-                select_len = min(len(doc), context_len)
-                context_ent[i, :select_len] = torch.LongTensor(doc[:select_len])
-
-            if self.precompute_elmo > 0:
-                if batch_i % self.precompute_elmo == 0:
-                    precompute_idx = idx_perm[self.batch_size * batch_i: self.batch_size * (batch_i+self.precompute_elmo)]
-                    elmo_tokens = [self.data['context'][i][6] for i in precompute_idx]
-                    context_cid = batch_to_ids(elmo_tokens)
-                else:
-                    context_cid = torch.LongTensor(1).fill_(0)
-            else:
-                context_cid = batch_to_ids(context_batch[6])
-
-            # Process Questions (number = batch * Qseq)
-            qa_data = self.data['qa']
-
-            question_num, question_len = 0, 0
-            question_batch = []
-            for first_QID in context_batch[5]:
-                i, question_seq = 0, []
-                while True:
-                    if first_QID + i >= len(qa_data) or qa_data[first_QID + i][0] != qa_data[first_QID][0]: # their corresponding context ID is different
-                        break
-                    question_seq.append(first_QID + i)
-                    question_len = max(question_len, len(qa_data[first_QID + i][1]))
-                    i += 1
-                question_batch.append(question_seq)
-                question_num = max(question_num, i)
-
-            question_id = torch.LongTensor(batch_size, question_num, question_len).fill_(0)
-            question_tokens = []
-            for i, q_seq in enumerate(question_batch):
-                for j, id in enumerate(q_seq):
-                    doc = qa_data[id][1]
-                    question_id[i, j, :len(doc)] = torch.LongTensor(doc)
-                    question_tokens.append(qa_data[id][10])
-
-                for j in range(len(q_seq), question_num):
-                    question_id[i, j, :2] = torch.LongTensor([2, 3])
-                    question_tokens.append(["<S>", "</S>"])
-
-            question_cid = batch_to_ids(question_tokens)
-
-            # Process Context-Question Features
-            feature_len = len(qa_data[0][2][0])
-            context_feature = torch.Tensor(batch_size, question_num, context_len, feature_len + (self.dialog_ctx * 3)).fill_(0)
-            for i, q_seq in enumerate(question_batch):
-                for j, id in enumerate(q_seq):
-                    doc = qa_data[id][2]
-                    select_len = min(len(doc), context_len)
-                    context_feature[i, j, :select_len, :feature_len] = torch.Tensor(doc[:select_len])
-
-                    for prv_ctx in range(0, self.dialog_ctx):
-                        if j > prv_ctx:
-                            prv_id = id - prv_ctx - 1
-                            prv_ans_st, prv_ans_end, prv_rat_st, prv_rat_end, prv_ans_choice = qa_data[prv_id][3], qa_data[prv_id][4], qa_data[prv_id][5], qa_data[prv_id][6], qa_data[prv_id][7]
-
-                            if prv_ans_choice == 3:
-                                # There is an answer
-                                for k in range(prv_ans_st, prv_ans_end + 1):
-                                    if k >= context_len:
-                                        break
-                                    context_feature[i, j, k, feature_len + prv_ctx * 3 + 1] = 1
-                            else:
-                                context_feature[i, j, :select_len, feature_len + prv_ctx * 3 + 2] = 1
-
-            # Process Answer (w/ raw question, answer text)
-            answer_s = torch.LongTensor(batch_size, question_num).fill_(0)
-            answer_e = torch.LongTensor(batch_size, question_num).fill_(0)
-            rationale_s = torch.LongTensor(batch_size, question_num).fill_(0)
-            rationale_e = torch.LongTensor(batch_size, question_num).fill_(0)
-            answer_c = torch.LongTensor(batch_size, question_num).fill_(0)
-            overall_mask = torch.ByteTensor(batch_size, question_num).fill_(0)
-            question, answer = [], []
-            for i, q_seq in enumerate(question_batch):
-                question_pack, answer_pack = [], []
-                for j, id in enumerate(q_seq):
-                    answer_s[i, j], answer_e[i, j], rationale_s[i, j], rationale_e[i, j], answer_c[i, j] = qa_data[id][3], qa_data[id][4], qa_data[id][5], qa_data[id][6], qa_data[id][7]
-                    overall_mask[i, j] = 1
-                    question_pack.append(qa_data[id][8])
-                    answer_pack.append(qa_data[id][9])
-                question.append(question_pack)
-                answer.append(answer_pack)
-
-            # Process Masks
-            context_mask = torch.eq(context_id, 0)
-            question_mask = torch.eq(question_id, 0)
-
-            text = list(context_batch[3]) # raw text
-            span = list(context_batch[4]) # character span for each words
-
-            if self.gpu: # page locked memory for async data transfer
-                context_id = context_id.pin_memory()
-                context_feature = context_feature.pin_memory()
-                context_tag = context_tag.pin_memory()
-                context_ent = context_ent.pin_memory()
-                context_mask = context_mask.pin_memory()
-                question_id = question_id.pin_memory()
-                question_mask = question_mask.pin_memory()
-                answer_s = answer_s.pin_memory()
-                answer_e = answer_e.pin_memory()
-                rationale_s = rationale_s.pin_memory()
-                rationale_e = rationale_e.pin_memory()
-                answer_c = answer_c.pin_memory()
-                overall_mask = overall_mask.pin_memory()
-                context_cid = context_cid.pin_memory()
-                question_cid = question_cid.pin_memory()
-
-            yield (context_id, context_cid, context_feature, context_tag, context_ent, context_mask,
-                   question_id, question_cid, question_mask, overall_mask,
-                   answer_s, answer_e, answer_c, rationale_s, rationale_e,
-                   text, span, question, answer)
+#  class BatchGen_CoQA:
+    #  def __init__(self, data, batch_size, gpu, dialog_ctx=0, evaluation=False, context_maxlen=100000, precompute_elmo=0):
+        #  '''
+        #  input:
+            #  data - see train.py
+            #  batch_size - int
+        #  '''
+        #  self.dialog_ctx = dialog_ctx
+        #  self.batch_size = batch_size
+        #  self.context_maxlen = context_maxlen
+        #  self.precompute_elmo = precompute_elmo
+#
+        #  self.eval = evaluation
+        #  self.gpu = gpu
+#
+        #  self.context_num = len(data['context'])
+        #  self.question_num = len(data['qa'])
+        #  self.data = data
+#
+    #  def __len__(self):
+        #  return (self.context_num + self.batch_size - 1) // self.batch_size
+#
+    #  def __iter__(self):
+        #  # Random permutation for the context
+        #  idx_perm = range(0, self.context_num)
+        #  if not self.eval:
+            #  idx_perm = np.random.permutation(idx_perm)
+#
+        #  batch_size = self.batch_size
+        #  for batch_i in range((self.context_num + self.batch_size - 1) // self.batch_size):
+#
+            #  batch_idx = idx_perm[self.batch_size * batch_i: self.batch_size * (batch_i+1)]
+#
+            #  context_batch = [self.data['context'][i] for i in batch_idx]
+            #  batch_size = len(context_batch)
+#
+            #  context_batch = list(zip(*context_batch))
+#
+            #  # Process Context Tokens
+            #  context_len = max(len(x) for x in context_batch[0])
+            #  if not self.eval:
+                #  context_len = min(context_len, self.context_maxlen)
+            #  context_id = torch.LongTensor(batch_size, context_len).fill_(0)
+            #  for i, doc in enumerate(context_batch[0]):
+                #  select_len = min(len(doc), context_len)
+                #  context_id[i, :select_len] = torch.LongTensor(doc[:select_len])
+#
+            #  # Process Context POS Tags
+            #  context_tag = torch.LongTensor(batch_size, context_len).fill_(0)
+            #  for i, doc in enumerate(context_batch[1]):
+                #  select_len = min(len(doc), context_len)
+                #  context_tag[i, :select_len] = torch.LongTensor(doc[:select_len])
+#
+            #  # Process Context Named Entity
+            #  context_ent = torch.LongTensor(batch_size, context_len).fill_(0)
+            #  for i, doc in enumerate(context_batch[2]):
+                #  select_len = min(len(doc), context_len)
+                #  context_ent[i, :select_len] = torch.LongTensor(doc[:select_len])
+#
+            #  if self.precompute_elmo > 0:
+                #  if batch_i % self.precompute_elmo == 0:
+                    #  precompute_idx = idx_perm[self.batch_size * batch_i: self.batch_size * (batch_i+self.precompute_elmo)]
+                    #  elmo_tokens = [self.data['context'][i][6] for i in precompute_idx]
+                    #  context_cid = batch_to_ids(elmo_tokens)
+                #  else:
+                    #  context_cid = torch.LongTensor(1).fill_(0)
+            #  else:
+                #  context_cid = batch_to_ids(context_batch[6])
+#
+            #  # Process Questions (number = batch * Qseq)
+            #  qa_data = self.data['qa']
+#
+            #  question_num, question_len = 0, 0
+            #  question_batch = []
+            #  for first_QID in context_batch[5]:
+                #  i, question_seq = 0, []
+                #  while True:
+                    #  if first_QID + i >= len(qa_data) or qa_data[first_QID + i][0] != qa_data[first_QID][0]: # their corresponding context ID is different
+                        #  break
+                    #  question_seq.append(first_QID + i)
+                    #  question_len = max(question_len, len(qa_data[first_QID + i][1]))
+                    #  i += 1
+                #  question_batch.append(question_seq)
+                #  question_num = max(question_num, i)
+#
+            #  question_id = torch.LongTensor(batch_size, question_num, question_len).fill_(0)
+            #  question_tokens = []
+            #  for i, q_seq in enumerate(question_batch):
+                #  for j, id in enumerate(q_seq):
+                    #  doc = qa_data[id][1]
+                    #  question_id[i, j, :len(doc)] = torch.LongTensor(doc)
+                    #  question_tokens.append(qa_data[id][10])
+#
+                #  for j in range(len(q_seq), question_num):
+                    #  question_id[i, j, :2] = torch.LongTensor([2, 3])
+                    #  question_tokens.append(["<S>", "</S>"])
+#
+            #  question_cid = batch_to_ids(question_tokens)
+#
+            #  # Process Context-Question Features
+            #  feature_len = len(qa_data[0][2][0])
+            #  context_feature = torch.Tensor(batch_size, question_num, context_len, feature_len + (self.dialog_ctx * 3)).fill_(0)
+            #  for i, q_seq in enumerate(question_batch):
+                #  for j, id in enumerate(q_seq):
+                    #  doc = qa_data[id][2]
+                    #  select_len = min(len(doc), context_len)
+                    #  context_feature[i, j, :select_len, :feature_len] = torch.Tensor(doc[:select_len])
+#
+                    #  for prv_ctx in range(0, self.dialog_ctx):
+                        #  if j > prv_ctx:
+                            #  prv_id = id - prv_ctx - 1
+                            #  prv_ans_st, prv_ans_end, prv_rat_st, prv_rat_end, prv_ans_choice = qa_data[prv_id][3], qa_data[prv_id][4], qa_data[prv_id][5], qa_data[prv_id][6], qa_data[prv_id][7]
+#
+                            #  if prv_ans_choice == 3:
+                                #  # There is an answer
+                                #  for k in range(prv_ans_st, prv_ans_end + 1):
+                                    #  if k >= context_len:
+                                        #  break
+                                    #  context_feature[i, j, k, feature_len + prv_ctx * 3 + 1] = 1
+                            #  else:
+                                #  context_feature[i, j, :select_len, feature_len + prv_ctx * 3 + 2] = 1
+#
+            #  # Process Answer (w/ raw question, answer text)
+            #  answer_s = torch.LongTensor(batch_size, question_num).fill_(0)
+            #  answer_e = torch.LongTensor(batch_size, question_num).fill_(0)
+            #  rationale_s = torch.LongTensor(batch_size, question_num).fill_(0)
+            #  rationale_e = torch.LongTensor(batch_size, question_num).fill_(0)
+            #  answer_c = torch.LongTensor(batch_size, question_num).fill_(0)
+            #  overall_mask = torch.ByteTensor(batch_size, question_num).fill_(0)
+            #  question, answer = [], []
+            #  for i, q_seq in enumerate(question_batch):
+                #  question_pack, answer_pack = [], []
+                #  for j, id in enumerate(q_seq):
+                    #  answer_s[i, j], answer_e[i, j], rationale_s[i, j], rationale_e[i, j], answer_c[i, j] = qa_data[id][3], qa_data[id][4], qa_data[id][5], qa_data[id][6], qa_data[id][7]
+                    #  overall_mask[i, j] = 1
+                    #  question_pack.append(qa_data[id][8])
+                    #  answer_pack.append(qa_data[id][9])
+                #  question.append(question_pack)
+                #  answer.append(answer_pack)
+#
+            #  # Process Masks
+            #  context_mask = torch.eq(context_id, 0)
+            #  question_mask = torch.eq(question_id, 0)
+#
+            #  text = list(context_batch[3]) # raw text
+            #  span = list(context_batch[4]) # character span for each words
+#
+            #  if self.gpu: # page locked memory for async data transfer
+                #  context_id = context_id.pin_memory()
+                #  context_feature = context_feature.pin_memory()
+                #  context_tag = context_tag.pin_memory()
+                #  context_ent = context_ent.pin_memory()
+                #  context_mask = context_mask.pin_memory()
+                #  question_id = question_id.pin_memory()
+                #  question_mask = question_mask.pin_memory()
+                #  answer_s = answer_s.pin_memory()
+                #  answer_e = answer_e.pin_memory()
+                #  rationale_s = rationale_s.pin_memory()
+                #  rationale_e = rationale_e.pin_memory()
+                #  answer_c = answer_c.pin_memory()
+                #  overall_mask = overall_mask.pin_memory()
+                #  context_cid = context_cid.pin_memory()
+                #  question_cid = question_cid.pin_memory()
+#
+            #  yield (context_id, context_cid, context_feature, context_tag, context_ent, context_mask,
+                   #  question_id, question_cid, question_mask, overall_mask,
+                   #  answer_s, answer_e, answer_c, rationale_s, rationale_e,
+                   #  text, span, question, answer)
 
 class BatchGen_QuAC:
-    def __init__(self, data, batch_size, gpu, dialog_ctx=0, use_dialog_act=False, evaluation=False, context_maxlen=100000, precompute_elmo=0):
+    def __init__(self, data, batch_size, gpu, dialog_ctx=0, use_dialog_act=False, evaluation=False, context_maxlen=100000, precompute_elmo=0, use_bert=1):
         '''
         input:
             data - see train.py
@@ -390,6 +391,7 @@ class BatchGen_QuAC:
         self.context_num = len(data['context'])
         self.question_num = len(data['qa'])
         self.data = data
+        self.use_bert = use_bert
 
     def __len__(self):
         return (self.context_num + self.batch_size - 1) // self.batch_size
@@ -407,7 +409,6 @@ class BatchGen_QuAC:
 
             context_batch = [self.data['context'][i] for i in batch_idx]
             batch_size = len(context_batch)
-
             context_batch = list(zip(*context_batch))
 
             # Process Context Tokens
@@ -424,6 +425,15 @@ class BatchGen_QuAC:
             for i, doc in enumerate(context_batch[1]):
                 select_len = min(len(doc), context_len)
                 context_tag[i, :select_len] = torch.LongTensor(doc[:select_len])
+
+            if self.use_bert:
+                context_bertidx = []
+                for bidx in context_batch[7]:
+                    context_bertidx.append(torch.Tensor(bidx).long())
+
+                context_bert_spans = []
+                for bspan in context_batch[8]:
+                    context_bert_spans.append(bspan)
 
             # Process Context Named Entity
             context_ent = torch.LongTensor(batch_size, context_len).fill_(0)
@@ -459,17 +469,25 @@ class BatchGen_QuAC:
 
             question_id = torch.LongTensor(batch_size, question_num, question_len).fill_(0)
             question_tokens = []
+            if self.use_bert:
+                question_bertidx = []
+                question_bert_spans = []
             for i, q_seq in enumerate(question_batch):
                 for j, id in enumerate(q_seq):
                     doc = qa_data[id][1]
                     question_id[i, j, :len(doc)] = torch.LongTensor(doc)
                     question_tokens.append(qa_data[id][8])
+                    if self.use_bert:
+                        question_bertidx.append(torch.Tensor(qa_data[id][9]).long())
+                        question_bert_spans.append(qa_data[id][10])
 
                 for j in range(len(q_seq), question_num):
                     question_id[i, j, :2] = torch.LongTensor([2, 3])
                     question_tokens.append(["<S>", "</S>"])
-
-            question_cid = batch_to_ids(question_tokens)
+                    if self.use_bert:
+                        # Bert uses 0 for padding
+                        question_bertidx.append(torch.Tensor([0, 0]).long())
+                        question_bert_spans.append([0, 1])
 
             # Process Context-Question Features
             feature_len = len(qa_data[0][2][0])
@@ -536,11 +554,19 @@ class BatchGen_QuAC:
                 overall_mask = overall_mask.pin_memory()
                 context_cid = context_cid.pin_memory()
                 question_cid = question_cid.pin_memory()
+                if self.use_bert:
+                    context_bertidx = [x.pin_memory() for x in context_bertidx]
 
-            yield (context_id, context_cid, context_feature, context_tag, context_ent, context_mask,
-                   question_id, question_cid, question_mask, overall_mask,
-                   answer_s, answer_e, answer_c,
-                   text, span, question, answer)
+            if self.use_bert:
+                yield (context_id, context_cid, context_feature, context_tag, context_ent, context_mask,
+                       question_id, question_cid, question_mask, overall_mask,
+                       answer_s, answer_e, answer_c,
+                       text, span, question, answer, context_bertidx, context_bert_spans, question_bertidx, context_bert_spans)
+            else:
+                yield (context_id, context_cid, context_feature, context_tag, context_ent, context_mask,
+                       question_id, question_cid, question_mask, overall_mask,
+                       answer_s, answer_e, answer_c,
+                       text, span, question, answer)
 
 #===========================================================================
 #========================== For QuAC evaluation ============================

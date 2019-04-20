@@ -14,6 +14,7 @@ import torch
 from pytorch_pretrained_bert import BertTokenizer
 from allennlp.modules.elmo import batch_to_ids
 from general_utils import flatten_json, normalize_text, build_embedding, load_glove_vocab, pre_proc, get_context_span, find_answer_span, feature_gen, token2id
+from QA_model import constants
 
 parser = argparse.ArgumentParser(
     description='Preprocessing train + dev files, about 20 minutes to run on Servers.'
@@ -34,8 +35,6 @@ parser.add_argument('--no_match', action='store_true',
                     help='do not extract the three exact matching features.')
 parser.add_argument('--seed', type=int, default=1023,
                     help='random seed for data shuffling, embedding init, etc.')
-
-BERT_MAXLEN = 512
 
 args = parser.parse_args()
 if args.use_bert:
@@ -63,7 +62,6 @@ log.info('glove loaded.')
 #===============================================================
 
 def proc_train(ith, article):
-    #  global args, bertTokenizer, BERT_MAXLEN
     rows = []
     
     for paragraph in article['paragraphs']:
@@ -114,10 +112,10 @@ def tokenize(lis):
     return tokens
 
 def bert_tokens_to_ids(tokens):
-    global BERT_MAXLEN, bertTokenizer
+    global bertTokenizer
     ids = []
-    for i in range(len(tokens) // BERT_MAXLEN + 1):
-        ids.extend(bertTokenizer.convert_tokens_to_ids(tokens[i * BERT_MAXLEN : (i + 1) * BERT_MAXLEN]))
+    for i in range(len(tokens) // constants.BERT_MAXLEN + 1):
+        ids.extend(bertTokenizer.convert_tokens_to_ids(tokens[i * constants.BERT_MAXLEN : (i + 1) * constants.BERT_MAXLEN]))
     return ids
 
 # tokens
@@ -283,7 +281,7 @@ log.info('saved training to disk.')
 #==========================================================
 
 def proc_dev(ith, article):
-    global args, bertTokenizer, BERT_MAXLEN
+    global args, bertTokenizer
     rows = []
     
     for paragraph in article['paragraphs']:
