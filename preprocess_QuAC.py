@@ -62,24 +62,14 @@ log.info('glove loaded.')
 #===============================================================
 
 def proc_train(ith, article):
-    global args, bertTokenizer, BERT_MAXLEN
+    #  global args, bertTokenizer, BERT_MAXLEN
     rows = []
     
     for paragraph in article['paragraphs']:
         context = paragraph['context']
-        if args.use_bert:
-            tokenized_context = bertTokenizer.tokenize(context)
-            context_bertidx = []
-            while tokenized_context:
-                temp = bertTokenizer.convert_tokens_to_ids(tokenized_context[:BERT_MAXLEN])
-                context_bertidx.extend(temp)
-                tokenized_context = tokenized_context[BERT_MAXLEN:]
         for qa in paragraph['qas']:
             qid = qa['id']
             question = qa['question']
-            if args.use_bert:
-                tokenized_question = bertTokenizer.tokenize(question)
-                question_bertidx = bertTokenizer.convert_tokens_to_ids(tokenized_question)
             answers = qa['orig_answer']
             
             answer = answers['text']
@@ -100,23 +90,12 @@ def proc_train(ith, article):
                                        2)
             else:
                 answer_start, answer_end = -1, -1
-            if args.use_bert:
-                rows.append((ith, question, answer, answer_start, answer_end, answer_choice, qid, question_bertidx))
-            else:
-                rows.append((ith, question, answer, answer_start, answer_end, answer_choice, qid))
+            rows.append((ith, question, answer, answer_start, answer_end, answer_choice, qid))
 
-    if args.use_bert:
-        return rows, context, context_bertidx
-    else:
-        return rows, context
+    return rows, context
 
-if args.use_bert:
-    train, train_context, train_context_bertidx = flatten_json(trn_file, proc_train, args.use_bert)
-    train = pd.DataFrame(train, columns=['context_idx', 'question', 'answer', 'answer_start',
-                                         'answer_end', 'answer_choice', 'qid', 'question_bertidx'])
-else:
-    train, train_context = flatten_json(trn_file, proc_train, args.use_bert)
-    train = pd.DataFrame(train, columns=['context_idx', 'question', 'answer',
+train, train_context = flatten_json(trn_file, proc_train, args.use_bert)
+train = pd.DataFrame(train, columns=['context_idx', 'question', 'answer',
                                     'answer_start', 'answer_end', 'answer_choice', 'qid'])
 
 log.info('train json data flattened.')
@@ -128,9 +107,23 @@ trQ_iter = (pre_proc(q) for q in train.question)
 trC_docs = [doc for doc in nlp.pipe(trC_iter, batch_size=64, n_threads=args.threads)]
 trQ_docs = [doc for doc in nlp.pipe(trQ_iter, batch_size=64, n_threads=args.threads)]
 
+def tokenize(lis):
+    global bertTokenizer
+    tokens = [bertTokenizer.tokenize(" ".join(x)) for x in lis]
+    return tokens
+
+def bert_tokens_to_ids(tokens):
+    global BERT_MAXLEN, bertTokenizer
+    ids = []
+    for i in range(len(tokens) // BERT_MAXLEN + 1):
+        ids.extend(bertTokenizer.convert_tokens_to_ids(tokens[i * BERT_MAXLEN : (i + 1) * BERT_MAXLEN]))
+    return ids
+
 # tokens
 trC_tokens = [[normalize_text(w.text) for w in doc] for doc in trC_docs]
 trQ_tokens = [[normalize_text(w.text) for w in doc] for doc in trQ_docs]
+
+
 trC_unnorm_tokens = [[w.text for w in doc] for doc in trC_docs]
 log.info('All tokens for training are obtained.')
 
@@ -180,6 +173,31 @@ trQ_ids = token2id(trQ_tokens, tr_vocab, unk_id=1)
 trQ_tokens = [["<S>"] + doc + ["</S>"] for doc in trQ_tokens]
 trQ_ids = [[2] + qsent + [3] for qsent in trQ_ids]
 print(trQ_ids[:10])
+
+
+def calc_bert_spans(berttokens, tokens):
+    span_idx = [[]]
+    currlen = 0
+    tidx = 0
+    for i, x in enumerate(berttokens):
+        currlen += len(x) if (x[0] != '#' or len(x) == 1) else len(x) - 2
+        span_idx[-1].append(i)
+        if currlen == len(tokens[tidx]):
+            span_idx.append([])
+            currlen = 0
+            tidx += 1
+    if span_idx[-1] == []:
+        del span_idx[-1]
+    return span_idx
+
+if args.use_bert:
+    trC_bert_tokens = tokenize(trC_tokens)
+    trC_bert_ids = [bert_tokens_to_ids(x) for x in trC_bert_tokens]
+    trQ_bert_tokens = tokenize(trQ_tokens)
+    trQ_bert_ids = [bert_tokens_to_ids(x) for x in trQ_bert_tokens]
+    trC_bert_spans = [calc_bert_spans(b, t) for b, t in zip(trC_bert_tokens, trC_tokens)]
+    trQ_bert_spans = [calc_bert_spans(b, t) for b, t in zip(trQ_bert_tokens, trQ_tokens)]
+
 # tags
 vocab_tag = [''] + list(nlp.tagger.labels)
 trC_tag_ids = token2id(trC_tags, vocab_tag)
@@ -229,8 +247,10 @@ if args.use_bert:
         'answer_choice': train.answer_choice.tolist(),
         'context_tokenized': trC_tokens,
         'question_tokenized': trQ_tokens,
-        'context_bertidx': train_context_bertidx,
-        'question_bertidx': train.question_bertidx.tolist()
+        'context_bertidx': trC_bert_ids,
+        'context_bert_spans': trC_bert_spans,
+        'question_bertidx': trQ_bert_ids,
+        'question_bert_spans': trQ_bert_spans
     }
 else:
     result = {
@@ -267,19 +287,9 @@ def proc_dev(ith, article):
     
     for paragraph in article['paragraphs']:
         context = paragraph['context']
-        if args.use_bert:
-            tokenized_context = bertTokenizer.tokenize(context)
-            context_bertidx = []
-            while tokenized_context:
-                temp = bertTokenizer.convert_tokens_to_ids(tokenized_context[:BERT_MAXLEN])
-                context_bertidx.extend(temp)
-                tokenized_context = tokenized_context[BERT_MAXLEN:]
         for qa in paragraph['qas']:
             qid = qa['id']
             question = qa['question']
-            if args.use_bert:
-                tokenized_question = bertTokenizer.tokenize(question)
-                question_bertidx = bertTokenizer.convert_tokens_to_ids(tokenized_question)
             answers = qa['orig_answer']
             
             answer = answers['text']
@@ -305,23 +315,12 @@ def proc_dev(ith, article):
             for ans in qa['answers']:
                 ans_ls.append(ans['text'])
             
-            if args.use_bert:
-                rows.append((ith, question, answer, answer_start, answer_end, answer_choice, ans_ls, qid, question_bertidx))
-            else:
-                rows.append((ith, question, answer, answer_start, answer_end, answer_choice, ans_ls, qid))
+            rows.append((ith, question, answer, answer_start, answer_end, answer_choice, ans_ls, qid))
 
-    if args.use_bert:
-        return rows, context, context_bertidx
-    else:
-        return rows, context
+    return rows, context
 
-if args.use_bert:
-    dev, dev_context, dev_context_bertidx = flatten_json(dev_file, proc_dev)
-    dev = pd.DataFrame(dev, columns=['context_idx', 'question', 'answer',
-                                     'answer_start', 'answer_end', 'answer_choice', 'all_answer', 'qid', 'question_bertidx'])
-else:
-    dev, dev_context = flatten_json(dev_file, proc_dev)
-    dev = pd.DataFrame(dev, columns=['context_idx', 'question', 'answer',
+dev, dev_context = flatten_json(dev_file, proc_dev)
+dev = pd.DataFrame(dev, columns=['context_idx', 'question', 'answer',
                                      'answer_start', 'answer_end', 'answer_choice', 'all_answer', 'qid'])
 log.info('dev json data flattened.')
 
@@ -373,6 +372,17 @@ devQ_ids = token2id(devQ_tokens, dev_vocab, unk_id=1)
 devQ_tokens = [["<S>"] + doc + ["</S>"] for doc in devQ_tokens]
 devQ_ids = [[2] + qsent + [3] for qsent in devQ_ids]
 print(devQ_ids[:10])
+
+if args.use_bert:
+    devC_bert_tokens = tokenize(devC_tokens)
+    devC_bert_ids = [bert_tokens_to_ids(x) for x in devC_bert_tokens]
+    devQ_bert_tokens = tokenize(devQ_tokens)
+    devQ_bert_ids = [bert_tokens_to_ids(x) for x in devQ_bert_tokens]
+
+    devC_bert_spans = [calc_bert_spans(b, t) for b, t in zip(devC_bert_tokens, devC_tokens)]
+    devQ_bert_spans = [calc_bert_spans(b, t) for b, t in zip(devQ_bert_tokens, devQ_tokens)]
+
+
 # tags
 devC_tag_ids = token2id(devC_tags, vocab_tag) # vocab_tag same as training
 # entities
@@ -419,8 +429,10 @@ if args.use_bert:
         'all_answer': dev.all_answer.tolist(),
         'context_tokenized': devC_tokens,
         'question_tokenized': devQ_tokens,
-        'context_bertidx': dev_context_bertidx,
-        'question_bertidx': dev.question_bertidx.tolist()
+        'context_bertidx': devC_bert_ids,
+        'context_bert_spans': devC_bert_spans,
+        'question_bertidx': devQ_bert_ids,
+        'question_bert_spans': devQ_bert_spans
     }
 else:
     result = {

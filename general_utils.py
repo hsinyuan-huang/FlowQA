@@ -86,24 +86,14 @@ def free_text_to_span(free_text, full_text):
 def flatten_json(file, proc_func, use_bert=1):
     with open(file, encoding="utf8") as f:
         data = json.load(f)['data']
-    if use_bert:
-        rows, contexts, context_idx = [], [], []
-    else:
-        rows, contexts = [], []
+    rows, contexts = [], []
 
     for i in range(len(data)):
-        if use_bert:
-            partial_rows, context, idx = proc_func(i, data[i])
-        else:
-            partial_rows, context = proc_func(i, data[i])
+        partial_rows, context = proc_func(i, data[i])
         rows.extend(partial_rows)
         contexts.append(context)
-        context_idx.append(idx)
 
-    if use_bert:
-        return rows, contexts, context_idx
-    else:
-        return rows, contexts
+    return rows, contexts
 
 def normalize_text(text):
     return unicodedata.normalize('NFD', text)
