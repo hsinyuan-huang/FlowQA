@@ -122,6 +122,7 @@ parser.add_argument('--use_bert', type=int, default=1,
 parser.add_argument('--finetune_bert', type=int, default=1,
                             help='pass 1 to finetune bert')
 parser.add_argument('--bert_type', type=str, default='bert-base-uncased')
+parser.add_argument('--bert_lr', type=float, default=3e-4)
 
 
 args = parser.parse_args()
@@ -129,6 +130,9 @@ args = parser.parse_args()
 if args.name != '':
     args.model_dir = args.model_dir + '_' + args.name
     args.log_file = os.path.dirname(args.log_file) + 'output_' + args.name + '.log'
+
+if args.bert_lr == 0 or args.use_bert == 0:
+    args.finetune_bert = 0
 
 # set model dir
 model_dir = args.model_dir

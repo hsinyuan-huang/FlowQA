@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import numpy as np
 import logging
 
+from pytorch_pretrained_bert.optimization import BertAdam
+
 from torch.nn import Parameter
 from torch.autograd import Variable
 from .utils import AverageMeter
@@ -35,8 +37,22 @@ class QAModel(object):
                     del state_dict['network'][k]
             self.network.load_state_dict(state_dict['network'])
 
-        # Building optimizer.
         parameters = [p for p in self.network.parameters() if p.requires_grad]
+        self.total_param = sum([p.nelement() for p in parameters])
+
+        # Building optimizer.
+        if opt['finetune_bert'] != 0:
+            bert_params = [p for p in self.network.bert.parameters() if p.requires_grad]
+            self.bertadam = BertAdam(bert_params, lr=opt['bert_lr'])
+            non_bert_params = []
+            for p in parameters:
+                for bp in bert_params:
+                    if p is bp:
+                        break
+                else:
+                    non_bert_params.append(p)
+            parameters = non_bert_params
+
         if opt['optimizer'] == 'sgd':
             self.optimizer = optim.SGD(parameters, opt['learning_rate'],
                                        momentum=opt['momentum'],
@@ -55,7 +71,7 @@ class QAModel(object):
             wvec_size = 0
         else:
             wvec_size = (opt['vocab_size'] - opt['tune_partial']) * opt['embedding_dim']
-        self.total_param = sum([p.nelement() for p in parameters]) - wvec_size
+        self.total_param -= wvec_size
 
     def update(self, batch):
         # Train mode
@@ -135,6 +151,8 @@ class QAModel(object):
 
         # Update parameters
         self.optimizer.step()
+        if self.opt['finetune_bert']:
+            self.bertadam.step()
         self.updates += 1
 
         # Reset any partially fixed parameters (e.g. rare words)

@@ -16,7 +16,6 @@ class FlowQA(nn.Module):
             print('#' * 100)
             print(' ' * 10, "You are using both BERT and ELMo")
             print('#' * 100)
-
         # Input size to RNN: word emb + char emb + question emb + manual features
         doc_input_size = 0
         que_input_size = 0
@@ -56,9 +55,8 @@ class FlowQA(nn.Module):
             que_input_size += CoVe_size
         if opt['use_bert']:
             self.bert = BertModel.from_pretrained(opt['bert_type'])
-            self.finetune_bert = True if opt['finetune_bert'] else False
 
-            if not self.finetune_bert:
+            if opt['finetune_bert'] == 0:
                 self.bert.eval()
                 for layer in self.bert.parameters():
                     layer.requires_grad = False
