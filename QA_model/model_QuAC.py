@@ -143,6 +143,9 @@ class QAModel(object):
 
         # Clear gradients and run backward
         self.optimizer.zero_grad()
+        if self.opt['finetune_bert']:
+            self.bertadam.zero_grad()
+
         loss.backward()
 
         # Clip gradients
