@@ -274,6 +274,9 @@ else:
 with open('QuAC_data/train_data.msgpack', 'wb') as f:
     msgpack.dump(result, f)
 
+del train, trQ_ids, trC_ids, trC_features, trC_tag_ids, trC_ent_ids, train_context, train_context_span
+del first_question, trC_tokens, trQ_tokens, trC_bert_ids, trC_bert_spans, trQ_bert_ids, trQ_bert_spans
+
 log.info('saved training to disk.')
 
 #==========================================================
