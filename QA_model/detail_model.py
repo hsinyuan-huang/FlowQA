@@ -158,7 +158,7 @@ class FlowQA(nn.Module):
         if self.opt['cuda']:
             counts = counts.cuda()
         emb /= counts
-        return bertemb
+        return emb
 
     def combine_bert_emb(self, emb, span):
         final_emb = []
