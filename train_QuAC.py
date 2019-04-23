@@ -123,6 +123,9 @@ parser.add_argument('--finetune_bert', type=int, default=1,
                             help='pass 1 to finetune bert')
 parser.add_argument('--bert_type', type=str, default='bert-base-uncased')
 parser.add_argument('--bert_lr', type=float, default=3e-4)
+parser.add_argument('--bert_warmup', type=float, default=-1)
+parser.add_argument('--bert_t_total', type=int, default=-1)
+parser.add_argument('--bert_schedule', type=str, default='warmup_constant')
 
 
 args = parser.parse_args()
@@ -161,6 +164,7 @@ log.addHandler(ch)
 
 def main():
     log.info('[program starts.]')
+    log.info('seed: {}'.format(args.seed))
     opt = vars(args) # changing opt will change args
     train, train_embedding, opt = load_train_data(opt)
     dev, dev_embedding, dev_answer = load_dev_data(opt)

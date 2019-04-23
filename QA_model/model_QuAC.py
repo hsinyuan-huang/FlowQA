@@ -43,7 +43,10 @@ class QAModel(object):
         # Building optimizer.
         if opt['finetune_bert'] != 0:
             bert_params = [p for p in self.network.bert.parameters() if p.requires_grad]
-            self.bertadam = BertAdam(bert_params, lr=opt['bert_lr'])
+            self.bertadam = BertAdam(bert_params,
+                                     lr=opt['bert_lr'],
+                                     warmup=opt['bert_warmup'],
+                                     t_total=opt['bert_t_total'])
             non_bert_params = []
             for p in parameters:
                 for bp in bert_params:
