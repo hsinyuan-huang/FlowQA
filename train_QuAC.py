@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 from QA_model.model_QuAC import QAModel
 from general_utils import find_best_score_and_thresh, BatchGen_QuAC
+from QA_model import constants
 
 parser = argparse.ArgumentParser(
     description='Train a Dialog QA model.'
@@ -126,9 +127,11 @@ parser.add_argument('--bert_lr', type=float, default=3e-4)
 parser.add_argument('--bert_warmup', type=float, default=-1)
 parser.add_argument('--bert_t_total', type=int, default=-1)
 parser.add_argument('--bert_schedule', type=str, default='warmup_constant')
+parser.add_argument('--bert_stride', type=int, default=constants.BERT_MAXLEN)
 
 
 args = parser.parse_args()
+assert 0 <= args.bert_stride <= constants.BERT_MAXLEN, "bert stride should be less than or equal to %d" % constants.BERT_MAXLEN
 
 if args.name != '':
     args.model_dir = args.model_dir + '_' + args.name

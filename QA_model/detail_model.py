@@ -55,16 +55,15 @@ class FlowQA(nn.Module):
             que_input_size += CoVe_size
         if opt['use_bert']:
             self.bert = BertModel.from_pretrained(opt['bert_type'])
+            self.bert_stride = opt['bert_stride']
 
             if opt['finetune_bert'] == 0:
                 self.bert.eval()
                 for layer in self.bert.parameters():
                     layer.requires_grad = False
 
-            with torch.no_grad():
-                allout, pooledout = self.bert(torch.Tensor([[0]]).long())
-                doc_input_size += pooledout.shape[1]
-                que_input_size += pooledout.shape[1]
+            doc_input_size += constants.BERT_EMB_SIZE
+            que_input_size += constants.BERT_EMB_SIZE
 
             if opt['cuda']:
                 self.bert = self.bert.cuda()
@@ -149,10 +148,16 @@ class FlowQA(nn.Module):
 
     def bert_emb(self, tensor):
         length = tensor.shape[1]
-        bertemb = []
-        for i in range((length + constants.BERT_MAXLEN - 1) // constants.BERT_MAXLEN):
-            bertemb.append(self.bert(tensor[:, i * constants.BERT_MAXLEN : (i + 1) * constants.BERT_MAXLEN], output_all_encoded_layers=False)[0])
-        bertemb = torch.cat(bertemb, dim=1)
+        emb = torch.zeros((*tensor.shape, constants.BERT_EMB_SIZE))
+        if self.opt['cuda']:
+            emb = emb.cuda()
+        counts = torch.zeros(1, length, 1)
+        for i in range(0, length, self.bert_stride):
+            emb[:, i : i + constants.BERT_MAXLEN, :] += self.bert(tensor[:, i : i + constants.BERT_MAXLEN], output_all_encoded_layers=False)[0]
+            counts[:, i : i + constants.BERT_MAXLEN] += 1
+        if self.opt['cuda']:
+            counts = counts.cuda()
+        emb /= counts
         return bertemb
 
     def combine_bert_emb(self, emb, span):
