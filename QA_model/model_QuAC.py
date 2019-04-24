@@ -69,6 +69,16 @@ class QAModel(object):
             raise RuntimeError('Unsupported optimizer: %s' % opt['optimizer'])
         if state_dict:
             self.optimizer.load_state_dict(state_dict['optimizer'])
+            for state in self.optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.cuda()
+            if opt['finetune_bert'] != 0 and 'bertadam' in state_dict:
+                self.bertadam.load_state_dict(state_dict['bertadam'])
+                for state in self.bertadam.state.values():
+                    for k, v in state.items():
+                        if isinstance(v, torch.Tensor):
+                            state[k] = v.cuda()
 
         if opt['fix_embeddings']:
             wvec_size = 0
@@ -308,6 +318,7 @@ class QAModel(object):
             'state_dict': {
                 'network': self.network.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
+                'bertadam': self.bertadam.state_dict(),
                 'updates': self.updates # how many updates
             },
             'config': self.opt,

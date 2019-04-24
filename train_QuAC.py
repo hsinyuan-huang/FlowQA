@@ -168,6 +168,7 @@ log.addHandler(ch)
 def main():
     log.info('[program starts.]')
     log.info('seed: {}'.format(args.seed))
+    log.info(str(vars(args)))
     opt = vars(args) # changing opt will change args
     train, train_embedding, opt = load_train_data(opt)
     dev, dev_embedding, dev_answer = load_dev_data(opt)
@@ -178,7 +179,10 @@ def main():
 
     if args.resume:
         log.info('[loading previous model...]')
-        checkpoint = torch.load(args.resume)
+        if args.cuda:
+            checkpoint = torch.load(args.resume, map_location={'cpu': 'cuda:0'})
+        else:
+            checkpoint = torch.load(args.resume, map_location={'cuda:0': 'cpu'})
         if args.resume_options:
             opt = checkpoint['config']
         state_dict = checkpoint['state_dict']
