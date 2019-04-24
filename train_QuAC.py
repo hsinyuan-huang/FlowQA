@@ -129,6 +129,7 @@ parser.add_argument('--bert_t_total', type=int, default=-1)
 parser.add_argument('--bert_schedule', type=str, default='warmup_constant')
 parser.add_argument('--bert_stride', type=int, default=constants.BERT_MAXLEN)
 parser.add_argument('--aggregate_grad_steps', type=int, default=1)
+parser.add_argument('--load_optimizer', type=int, default=1)
 
 args = parser.parse_args()
 assert 0 <= args.bert_stride <= constants.BERT_MAXLEN, "bert stride should be less than or equal to %d" % constants.BERT_MAXLEN
