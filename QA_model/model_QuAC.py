@@ -87,7 +87,6 @@ class QAModel(object):
             wvec_size = 0
         else:
             wvec_size = (opt['vocab_size'] - opt['tune_partial']) * opt['embedding_dim']
-        self.total_param -= wvec_size
 
     def update(self, batch):
         # Train mode
@@ -321,12 +320,13 @@ class QAModel(object):
             'state_dict': {
                 'network': self.network.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
-                'bertadam': self.bertadam.state_dict(),
                 'updates': self.updates # how many updates
             },
             'config': self.opt,
             'epoch': epoch
         }
+        if self.opt['use_bert']:
+            params['state_dict']['bertadam'] = self.bertadam.state_dict()
         try:
             torch.save(params, filename)
             logger.info('model saved to {}'.format(filename))
