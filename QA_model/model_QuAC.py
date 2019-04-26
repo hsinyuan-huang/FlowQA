@@ -67,8 +67,21 @@ class QAModel(object):
             self.optimizer = optim.Adadelta(parameters, rho=0.95, weight_decay=opt['weight_decay'])
         else:
             raise RuntimeError('Unsupported optimizer: %s' % opt['optimizer'])
-        if state_dict:
+        if state_dict and opt['load_optimizer']:
             self.optimizer.load_state_dict(state_dict['optimizer'])
+            if opt['cuda']:
+                for state in self.optimizer.state.values():
+                    for k, v in state.items():
+                        if isinstance(v, torch.Tensor):
+                            state[k] = v.cuda()
+
+            if opt['finetune_bert'] != 0 and 'bertadam' in state_dict:
+                self.bertadam.load_state_dict(state_dict['bertadam'])
+                if opt['cuda']:
+                    for state in self.bertadam.state.values():
+                        for k, v in state.items():
+                            if isinstance(v, torch.Tensor):
+                                state[k] = v.cuda()
 
         if opt['fix_embeddings']:
             wvec_size = 0
@@ -80,7 +93,7 @@ class QAModel(object):
         # Train mode
         self.network.train()
         torch.set_grad_enabled(True)
-
+        
         if self.opt['use_bert']:
             context_bertidx = batch[17]
             context_bert_spans = batch[18]
@@ -144,26 +157,47 @@ class QAModel(object):
             loss = loss + (single_loss / overall_mask.size(0))
         self.train_loss.update(loss.item(), overall_mask.size(0))
 
+        '''
         # Clear gradients and run backward
         self.optimizer.zero_grad()
         if self.opt['finetune_bert']:
             self.bertadam.zero_grad()
-
+        '''
+        loss = loss/self.opt['aggregate_grad_steps']
         loss.backward()
 
+        '''
         # Clip gradients
         torch.nn.utils.clip_grad_norm_(self.network.parameters(),
                                        self.opt['grad_clipping'])
-
+        
         # Update parameters
         self.optimizer.step()
         if self.opt['finetune_bert']:
             self.bertadam.step()
         self.updates += 1
-
+        '''
         # Reset any partially fixed parameters (e.g. rare words)
         self.reset_embeddings()
         self.eval_embed_transfer = True
+        
+        return loss
+        
+    def take_step(self):
+        # Clip Gradients
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(),
+                                       self.opt['grad_clipping'])
+        
+        # Update parameters
+        self.optimizer.step()
+        if self.opt['finetune_bert']:
+            self.bertadam.step()
+        self.updates += 1
+        
+        # Clear gradients and run backward
+        self.optimizer.zero_grad()
+        if self.opt['finetune_bert']:
+            self.bertadam.zero_grad()
 
     def predict(self, batch, No_Ans_Threshold=None):
         # Eval mode
@@ -287,6 +321,7 @@ class QAModel(object):
             'state_dict': {
                 'network': self.network.state_dict(),
                 'optimizer': self.optimizer.state_dict(),
+                'bertadam': self.bertadam.state_dict(),
                 'updates': self.updates # how many updates
             },
             'config': self.opt,
