@@ -93,8 +93,6 @@ def flatten_json(file, proc_func):
         partial_rows, context = proc_func(i, data[i])
         rows.extend(partial_rows)
         contexts.append(context)
-        if i == 10:
-            break
 
     return rows, contexts
 

@@ -125,7 +125,7 @@ class QAModel(object):
         # Run forward
         # output: [batch_size, question_num, context_len], [batch_size, question_num]
         if self.opt['use_bert']:
-            score_s, score_e, score_no_answ = self.network(*inputs, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans)
+            score_s, score_e, score_c = self.network(*inputs, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans)
         else:
             score_s, score_e, score_c = self.network(*inputs)
 
@@ -229,7 +229,7 @@ class QAModel(object):
         # Run forward
         # output: [batch_size, question_num, context_len], [batch_size, question_num]
         if self.opt['use_bert']:
-            score_s, score_e, score_no_answ = self.network(*inputs, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans)
+            score_s, score_e, score_c = self.network(*inputs, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans)
         else:
             score_s, score_e, score_c = self.network(*inputs)
         score_s = F.softmax(score_s, dim=2)
@@ -241,8 +241,8 @@ class QAModel(object):
         score_c = score_c.data.cpu()
 
         # Get argmax text spans
-        text = batch[-4]
-        spans = batch[-3]
+        text = batch[15]
+        spans = batch[16]
         overall_mask = batch[9]
 
         predictions = []

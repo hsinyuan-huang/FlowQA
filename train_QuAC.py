@@ -285,7 +285,6 @@ def lr_decay(optimizer, lr_decay):
     return optimizer
 
 def load_train_data(opt):
-    global args
     with open(os.path.join(args.train_dir, 'train_meta.msgpack'), 'rb') as f:
         meta = msgpack.load(f, encoding='utf8')
     embedding = torch.Tensor(meta['embedding'])
@@ -298,7 +297,7 @@ def load_train_data(opt):
 
     opt['num_features'] = len(data['context_features'][0][0])
     
-    if args.use_bert:
+    if opt['use_bert']:
         train = {'context': list(zip(
                             data['context_ids'],
                             data['context_tags'],
@@ -356,7 +355,7 @@ def load_dev_data(opt): # can be extended to true test set
 
     assert opt['num_features'] == len(data['context_features'][0][0])
 
-    if args.use_bert:
+    if opt['use_bert']:
         dev = {'context': list(zip(
                             data['context_ids'],
                             data['context_tags'],

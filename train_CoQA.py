@@ -13,6 +13,7 @@ import msgpack
 import pandas as pd
 import numpy as np
 from QA_model.model_CoQA import QAModel
+from QA_model import constants
 from CoQA_eval import CoQAEvaluator
 from general_utils import find_best_score_and_thresh, BatchGen_CoQA
 
