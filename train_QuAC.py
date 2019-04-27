@@ -123,7 +123,7 @@ parser.add_argument('--finetune_bert', type=int, default=1,
                             help='pass 1 to finetune bert')
 parser.add_argument('--bert_type', type=str, default='bert-base-uncased')
 parser.add_argument('--bert_lr', type=float, default=3e-4)
-
+parser.add_argument('--bert_num_layers', type=int, default=4)
 
 args = parser.parse_args()
 

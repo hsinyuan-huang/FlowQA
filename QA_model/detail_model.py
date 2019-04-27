@@ -151,7 +151,8 @@ class FlowQA(nn.Module):
         length = tensor.shape[1]
         bertemb = []
         for i in range((length + constants.BERT_MAXLEN - 1) // constants.BERT_MAXLEN):
-            bertemb.append(self.bert(tensor[:, i * constants.BERT_MAXLEN : (i + 1) * constants.BERT_MAXLEN], output_all_encoded_layers=False)[0])
+            temp = self.bert(tensor[:, i * constants.BERT_MAXLEN : (i + 1) * constants.BERT_MAXLEN])[0]
+            bertemb.append(sum(temp[-self.opt['bert_num_layers']:]))
         bertemb = torch.cat(bertemb, dim=1)
         return bertemb
 
