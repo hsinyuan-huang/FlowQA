@@ -184,7 +184,7 @@ def calc_bert_spans(berttokens, tokens):
     for i, x in enumerate(berttokens):
         currlen += len(x) if (x[0] != '#' or len(x) == 1) else len(x) - 2
         span_idx[-1].append(i)
-        if currlen == len(tokens[tidx]):
+        if currlen == len(tokens[tidx]) or x == '[UNK]':
             span_idx.append([])
             currlen = 0
             tidx += 1
