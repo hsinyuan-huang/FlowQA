@@ -43,7 +43,10 @@ class QAModel(object):
         # Building optimizer.
         if opt['finetune_bert'] != 0:
             bert_params = [p for p in self.network.bert.parameters() if p.requires_grad]
-            self.bertadam = BertAdam(bert_params, lr=opt['bert_lr'])
+            self.bertadam = BertAdam(bert_params,
+                                     lr=opt['bert_lr'],
+                                     warmup=opt['bert_warmup'],
+                                     t_total=opt['bert_t_total'])
             non_bert_params = []
             for p in parameters:
                 for bp in bert_params:
@@ -64,20 +67,32 @@ class QAModel(object):
             self.optimizer = optim.Adadelta(parameters, rho=0.95, weight_decay=opt['weight_decay'])
         else:
             raise RuntimeError('Unsupported optimizer: %s' % opt['optimizer'])
-        if state_dict:
+        if state_dict and opt['load_optimizer']:
             self.optimizer.load_state_dict(state_dict['optimizer'])
+            if opt['cuda']:
+                for state in self.optimizer.state.values():
+                    for k, v in state.items():
+                        if isinstance(v, torch.Tensor):
+                            state[k] = v.cuda()
+
+            if opt['finetune_bert'] != 0 and 'bertadam' in state_dict:
+                self.bertadam.load_state_dict(state_dict['bertadam'])
+                if opt['cuda']:
+                    for state in self.bertadam.state.values():
+                        for k, v in state.items():
+                            if isinstance(v, torch.Tensor):
+                                state[k] = v.cuda()
 
         if opt['fix_embeddings']:
             wvec_size = 0
         else:
             wvec_size = (opt['vocab_size'] - opt['tune_partial']) * opt['embedding_dim']
-        self.total_param -= wvec_size
 
     def update(self, batch):
         # Train mode
         self.network.train()
         torch.set_grad_enabled(True)
-
+        
         if self.opt['use_bert']:
             context_bertidx = batch[17]
             context_bert_spans = batch[18]
@@ -141,26 +156,47 @@ class QAModel(object):
             loss = loss + (single_loss / overall_mask.size(0))
         self.train_loss.update(loss.item(), overall_mask.size(0))
 
+        '''
         # Clear gradients and run backward
         self.optimizer.zero_grad()
         if self.opt['finetune_bert']:
             self.bertadam.zero_grad()
-
+        '''
+        loss = loss/self.opt['aggregate_grad_steps']
         loss.backward()
 
+        '''
         # Clip gradients
         torch.nn.utils.clip_grad_norm_(self.network.parameters(),
                                        self.opt['grad_clipping'])
-
+        
         # Update parameters
         self.optimizer.step()
         if self.opt['finetune_bert']:
             self.bertadam.step()
         self.updates += 1
-
+        '''
         # Reset any partially fixed parameters (e.g. rare words)
         self.reset_embeddings()
         self.eval_embed_transfer = True
+        
+        return loss
+        
+    def take_step(self):
+        # Clip Gradients
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(),
+                                       self.opt['grad_clipping'])
+        
+        # Update parameters
+        self.optimizer.step()
+        if self.opt['finetune_bert']:
+            self.bertadam.step()
+        self.updates += 1
+        
+        # Clear gradients and run backward
+        self.optimizer.zero_grad()
+        if self.opt['finetune_bert']:
+            self.bertadam.zero_grad()
 
     def predict(self, batch, No_Ans_Threshold=None):
         # Eval mode
@@ -289,6 +325,8 @@ class QAModel(object):
             'config': self.opt,
             'epoch': epoch
         }
+        if self.opt['use_bert']:
+            params['state_dict']['bertadam'] = self.bertadam.state_dict()
         try:
             torch.save(params, filename)
             logger.info('model saved to {}'.format(filename))

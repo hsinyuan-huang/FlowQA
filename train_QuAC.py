@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 from QA_model.model_QuAC import QAModel
 from general_utils import find_best_score_and_thresh, BatchGen_QuAC
+from QA_model import constants
 
 parser = argparse.ArgumentParser(
     description='Train a Dialog QA model.'
@@ -45,7 +46,7 @@ parser.add_argument('--cuda', type=bool, default=torch.cuda.is_available(),
                     help='whether to use GPU acceleration.')
 # training
 parser.add_argument('-e', '--epoches', type=int, default=30)
-parser.add_argument('-bs', '--batch_size', type=int, default=3)
+parser.add_argument('-bs', '--batch_size', type=int, default=1)
 parser.add_argument('-ebs', '--elmo_batch_size', type=int, default=12)
 parser.add_argument('-rs', '--resume', default='',
                     help='previous model pathname. '
@@ -122,10 +123,21 @@ parser.add_argument('--use_bert', type=int, default=1,
 parser.add_argument('--finetune_bert', type=int, default=1,
                             help='pass 1 to finetune bert')
 parser.add_argument('--bert_type', type=str, default='bert-base-uncased')
+<<<<<<< HEAD
 parser.add_argument('--bert_lr', type=float, default=3e-4)
 parser.add_argument('--bert_num_layers', type=int, default=4)
+=======
+parser.add_argument('--bert_lr', type=float, default=1e-5)
+parser.add_argument('--bert_warmup', type=float, default=-1)
+parser.add_argument('--bert_t_total', type=int, default=-1)
+parser.add_argument('--bert_schedule', type=str, default='warmup_constant')
+parser.add_argument('--bert_stride', type=int, default=constants.BERT_MAXLEN)
+parser.add_argument('--aggregate_grad_steps', type=int, default=1)
+parser.add_argument('--load_optimizer', type=int, default=1)
+>>>>>>> 17d8eec2c2bf5b7e154b7184e2fde246a27b356b
 
 args = parser.parse_args()
+assert 0 <= args.bert_stride <= constants.BERT_MAXLEN, "bert stride should be less than or equal to %d" % constants.BERT_MAXLEN
 
 if args.name != '':
     args.model_dir = args.model_dir + '_' + args.name
@@ -161,6 +173,8 @@ log.addHandler(ch)
 
 def main():
     log.info('[program starts.]')
+    log.info('seed: {}'.format(args.seed))
+    log.info(str(vars(args)))
     opt = vars(args) # changing opt will change args
     train, train_embedding, opt = load_train_data(opt)
     dev, dev_embedding, dev_answer = load_dev_data(opt)
@@ -171,7 +185,10 @@ def main():
 
     if args.resume:
         log.info('[loading previous model...]')
-        checkpoint = torch.load(args.resume)
+        if args.cuda:
+            checkpoint = torch.load(args.resume, map_location={'cpu': 'cuda:0'})
+        else:
+            checkpoint = torch.load(args.resume, map_location={'cuda:0': 'cpu'})
         if args.resume_options:
             opt = checkpoint['config']
         state_dict = checkpoint['state_dict']
@@ -209,14 +226,30 @@ def main():
         best_val_score, best_na, best_thresh = f1, na, thresh
     else:
         best_val_score, best_na, best_thresh = 0.0, 0.0, 0.0
+    
+    aggregate_grad_steps = 1
+    if opt['use_bert']:
+        aggregate_grad_steps = opt['aggregate_grad_steps']
 
     for epoch in range(epoch_0, epoch_0 + args.epoches):
+
         log.warning('Epoch {}'.format(epoch))
         # train
         batches = BatchGen_QuAC(train, batch_size=args.batch_size, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_dialog_act=args.use_dialog_act, precompute_elmo=args.elmo_batch_size // args.batch_size, use_bert=args.use_bert)
         start = datetime.now()
+        
+        total_batches = len(batches)
+        loss = 0
+        model.optimizer.zero_grad()
+        if opt['finetune_bert']:
+            model.bertadam.zero_grad()
+        
         for i, batch in enumerate(batches):
-            model.update(batch)
+            loss += model.update(batch)
+            if (i+1) % aggregate_grad_steps == 0 or total_batches == (i+1):
+                # Update the gradients
+                model.take_step()
+                loss = 0
             if i % args.log_per_updates == 0:
                 log.info('updates[{0:6}] train loss[{1:.5f}] remaining[{2}]'.format(
                     model.updates, model.train_loss.avg,
@@ -257,7 +290,6 @@ def lr_decay(optimizer, lr_decay):
     return optimizer
 
 def load_train_data(opt):
-    global args
     with open(os.path.join(args.train_dir, 'train_meta.msgpack'), 'rb') as f:
         meta = msgpack.load(f, encoding='utf8')
     embedding = torch.Tensor(meta['embedding'])
@@ -270,7 +302,7 @@ def load_train_data(opt):
 
     opt['num_features'] = len(data['context_features'][0][0])
     
-    if args.use_bert:
+    if opt['use_bert']:
         train = {'context': list(zip(
                             data['context_ids'],
                             data['context_tags'],
@@ -328,7 +360,7 @@ def load_dev_data(opt): # can be extended to true test set
 
     assert opt['num_features'] == len(data['context_features'][0][0])
 
-    if args.use_bert:
+    if opt['use_bert']:
         dev = {'context': list(zip(
                             data['context_ids'],
                             data['context_tags'],

@@ -53,18 +53,20 @@ class FlowQA(nn.Module):
             CoVe_size = self.CoVe.output_size
             doc_input_size += CoVe_size
             que_input_size += CoVe_size
+        else:
+            CoVe_size = 0
+
         if opt['use_bert']:
             self.bert = BertModel.from_pretrained(opt['bert_type'])
+            self.bert_stride = opt['bert_stride']
 
             if opt['finetune_bert'] == 0:
                 self.bert.eval()
                 for layer in self.bert.parameters():
                     layer.requires_grad = False
 
-            with torch.no_grad():
-                allout, pooledout = self.bert(torch.Tensor([[0]]).long())
-                doc_input_size += pooledout.shape[1]
-                que_input_size += pooledout.shape[1]
+            doc_input_size += constants.BERT_EMB_SIZE
+            que_input_size += constants.BERT_EMB_SIZE
 
             if opt['cuda']:
                 self.bert = self.bert.cuda()
@@ -105,8 +107,12 @@ class FlowQA(nn.Module):
         doc_hidden_size = opt['hidden_size'] * 2
 
         # RNN question encoder
-        self.question_rnn, que_hidden_size = layers.RNN_from_opt(que_hidden_size, opt['hidden_size'], opt,
-        num_layers=2, concat_rnn=opt['concat_rnn'], add_feat=CoVe_size)
+        if opt['CoVe_opt'] > 0:
+            self.question_rnn, que_hidden_size = layers.RNN_from_opt(que_hidden_size, opt['hidden_size'], opt,
+            num_layers=2, concat_rnn=opt['concat_rnn'], add_feat=CoVe_size)
+        else:
+            self.question_rnn, que_hidden_size = layers.RNN_from_opt(que_hidden_size, opt['hidden_size'], opt,
+            num_layers=2, concat_rnn=opt['concat_rnn'])
 
         # Output sizes of rnn encoders
         print('After Input LSTM, the vector_sizes [doc, query] are [', doc_hidden_size, que_hidden_size, '] * 2')
@@ -149,12 +155,19 @@ class FlowQA(nn.Module):
 
     def bert_emb(self, tensor):
         length = tensor.shape[1]
-        bertemb = []
-        for i in range((length + constants.BERT_MAXLEN - 1) // constants.BERT_MAXLEN):
-            temp = self.bert(tensor[:, i * constants.BERT_MAXLEN : (i + 1) * constants.BERT_MAXLEN])[0]
-            bertemb.append(sum(temp[-self.opt['bert_num_layers']:]))
-        bertemb = torch.cat(bertemb, dim=1)
-        return bertemb
+
+        emb = torch.zeros((*tensor.shape, constants.BERT_EMB_SIZE))
+        if self.opt['cuda']:
+            emb = emb.cuda()
+        counts = torch.zeros(1, length, 1)
+        for i in range(0, length, self.bert_stride):
+            temp = self.bert(tensor[:, i : i + constants.BERT_MAXLEN])[0]
+            emb[:, i : i + constants.BERT_MAXLEN, :] += sum(temp[-self.opt['bert_num_layers']:])
+            counts[:, i : i + constants.BERT_MAXLEN] += 1
+        if self.opt['cuda']:
+            counts = counts.cuda()
+        emb /= counts
+        return emb
 
     def combine_bert_emb(self, emb, span):
         final_emb = []
@@ -296,7 +309,8 @@ class FlowQA(nn.Module):
             return z.unsqueeze(1).expand(z.size(0), x2_full.size(1), z.size(1), z.size(2)).contiguous().view(-1, z.size(1), z.size(2))
 
         x1_emb_expand = expansion_for_doc(x1_emb)
-        x1_cove_high_expand = expansion_for_doc(x1_cove_high)
+        if self.opt['CoVe_opt']:
+            x1_cove_high_expand = expansion_for_doc(x1_cove_high)
         #x1_elmo_expand = expansion_for_doc(x1_elmo)
         if self.opt['no_em']:
             x1_f = x1_f[:, :, :, 3:]
@@ -334,7 +348,10 @@ class FlowQA(nn.Module):
 
         doc_abstr_ls.append(doc_hiddens)
 
-        doc_hiddens = self.doc_rnn2(torch.cat((doc_hiddens, doc_hiddens_flow, x1_cove_high_expand), dim=2), x1_mask)
+        if self.opt['CoVe_opt'] > 0:
+            doc_hiddens = self.doc_rnn2(torch.cat((doc_hiddens, doc_hiddens_flow, x1_cove_high_expand), dim=2), x1_mask)
+        else:
+            doc_hiddens = self.doc_rnn2(torch.cat((doc_hiddens, doc_hiddens_flow), dim=2), x1_mask)
         doc_hiddens_flow = flow_operation(doc_hiddens, self.dialog_flow2)
         doc_abstr_ls.append(doc_hiddens)
 
@@ -344,15 +361,22 @@ class FlowQA(nn.Module):
         #    pass
 
         # Encode question with RNN
-        _, que_abstr_ls = self.question_rnn(x2_input, x2_mask, return_list=True, additional_x=x2_cove_high)
+        if self.opt['CoVe_opt'] > 0:
+            _, que_abstr_ls = self.question_rnn(x2_input, x2_mask, return_list=True, additional_x=x2_cove_high)
+        else:
+            _, que_abstr_ls = self.question_rnn(x2_input, x2_mask, return_list=True)
 
         # Final question layer
         question_hiddens = self.high_lvl_qrnn(torch.cat(que_abstr_ls, 2), x2_mask)
         que_abstr_ls += [question_hiddens]
 
         # Main Attention Fusion Layer
-        doc_info = self.deep_attn([torch.cat([x1_emb_expand, x1_cove_high_expand], 2)], doc_abstr_ls,
-        [torch.cat([x2_emb, x2_cove_high], 2)], que_abstr_ls, x1_mask, x2_mask)
+        if self.opt['CoVe_opt'] > 0:
+            doc_info = self.deep_attn([torch.cat([x1_emb_expand, x1_cove_high_expand], 2)], doc_abstr_ls,
+                [torch.cat([x2_emb, x2_cove_high], 2)], que_abstr_ls, x1_mask, x2_mask)
+        else:
+            doc_info = self.deep_attn([x1_emb_expand], doc_abstr_ls,
+                [x2_emb], que_abstr_ls, x1_mask, x2_mask)
 
         doc_hiddens = self.deep_attn_rnn(torch.cat((doc_info, doc_hiddens_flow), dim=2), x1_mask)
         doc_hiddens_flow = flow_operation(doc_hiddens, self.dialog_flow3)
