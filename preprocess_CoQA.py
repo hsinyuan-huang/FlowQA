@@ -122,7 +122,7 @@ def tokenize_each_element(lis):
         token_spans.append(curr_span)
     return all_tokens, token_spans
 
-def bert_tokenize(lis):
+def bert_tokenize(x):
     global bertTokenizer
     return bertTokenizer.tokenize(x)
 
