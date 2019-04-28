@@ -46,7 +46,7 @@ parser.add_argument('--cuda', type=bool, default=torch.cuda.is_available(),
                     help='whether to use GPU acceleration.')
 # training
 parser.add_argument('-e', '--epoches', type=int, default=30)
-parser.add_argument('-bs', '--batch_size', type=int, default=1)
+parser.add_argument('-bs', '--batch_size', type=int, default=3)
 parser.add_argument('-ebs', '--elmo_batch_size', type=int, default=12)
 parser.add_argument('-rs', '--resume', default='',
                     help='previous model pathname. '
@@ -129,7 +129,7 @@ parser.add_argument('--bert_warmup', type=float, default=-1)
 parser.add_argument('--bert_t_total', type=int, default=-1)
 parser.add_argument('--bert_schedule', type=str, default='warmup_constant')
 parser.add_argument('--bert_stride', type=int, default=constants.BERT_MAXLEN)
-parser.add_argument('--aggregate_grad_steps', type=int, default=1)
+parser.add_argument('--aggregate_grad_steps', type=int, default=3)
 parser.add_argument('--load_optimizer', type=int, default=1)
 
 args = parser.parse_args()

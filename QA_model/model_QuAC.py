@@ -325,7 +325,7 @@ class QAModel(object):
             'config': self.opt,
             'epoch': epoch
         }
-        if self.opt['use_bert']:
+        if self.opt['finetune_bert']:
             params['state_dict']['bertadam'] = self.bertadam.state_dict()
         try:
             torch.save(params, filename)

@@ -93,7 +93,7 @@ def proc_train(ith, article):
 
     return rows, context
 
-train, train_context = flatten_json(trn_file, proc_train, args.use_bert)
+train, train_context = flatten_json(trn_file, proc_train)
 train = pd.DataFrame(train, columns=['context_idx', 'question', 'answer',
                                     'answer_start', 'answer_end', 'answer_choice', 'qid'])
 
