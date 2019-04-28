@@ -103,6 +103,29 @@ trQ_iter = (pre_proc(q) for q in train.question)
 trC_docs = [doc for doc in nlp.pipe(trC_iter, batch_size=64, n_threads=args.threads)]
 trQ_docs = [doc for doc in nlp.pipe(trQ_iter, batch_size=64, n_threads=args.threads)]
 
+def tokenize_each_element(lis):
+    token_spans = []
+    all_tokens = []
+    for elem in lis:
+        curr_tokens = []
+        curr_span = []
+        count = 0
+        for x in elem:
+            tokens = bert_tokenize(x)
+            curr_tokens += tokens
+            elem_span = []
+            for i in range(len(tokens)):
+                elem_span.append(count)
+                count += 1
+            curr_span.append(elem_span)
+        all_tokens.append(curr_tokens)
+        token_spans.append(curr_span)
+    return all_tokens, token_spans
+
+def bert_tokenize(lis):
+    global bertTokenizer
+    return bertTokenizer.tokenize(x)
+
 def tokenize(lis):
     global bertTokenizer
     tokens = [bertTokenizer.tokenize(" ".join(x)) for x in lis]
@@ -193,13 +216,19 @@ def calc_bert_spans(berttokens, tokens):
     return span_idx
 
 if args.use_bert:
-    trC_bert_tokens = tokenize(trC_tokens)
-    trC_bert_ids = [bert_tokens_to_ids(x) for x in trC_bert_tokens]
-    trQ_bert_tokens = tokenize(trQ_tokens)
-    trQ_bert_ids = [bert_tokens_to_ids(x) for x in trQ_bert_tokens]
-    trC_bert_spans = [calc_bert_spans(b, t) for b, t in zip(trC_bert_tokens, trC_tokens)]
-    trQ_bert_spans = [calc_bert_spans(b, t) for b, t in zip(trQ_bert_tokens, trQ_tokens)]
+    trC_bert_tokens, trC_bert_spans = tokenize_each_element(trC_tokens)
+    trQ_bert_tokens, trQ_bert_spans = tokenize_each_element(trQ_tokens)
 
+    #trC_bert_tokens = tokenize(trC_tokens)
+    trC_bert_ids = [bert_tokens_to_ids(x) for x in trC_bert_tokens]
+    #trQ_bert_tokens = tokenize(trQ_tokens)
+    trQ_bert_ids = [bert_tokens_to_ids(x) for x in trQ_bert_tokens]
+    #trC_bert_spans = [calc_bert_spans(b, t) for b, t in zip(trC_bert_tokens, trC_tokens)]
+    #trQ_bert_spans = [calc_bert_spans(b, t) for b, t in zip(trQ_bert_tokens, trQ_tokens)]
+    
+for x, y in zip(trC_bert_spans, trC_tokens):
+    assert len(x) == len(y)
+    
 # tags
 vocab_tag = [''] + list(nlp.tagger.labels)
 trC_tag_ids = token2id(trC_tags, vocab_tag)
@@ -381,13 +410,16 @@ devQ_ids = [[2] + qsent + [3] for qsent in devQ_ids]
 print(devQ_ids[:10])
 
 if args.use_bert:
-    devC_bert_tokens = tokenize(devC_tokens)
+    devC_bert_tokens, devC_bert_spans = tokenize_each_element(devC_tokens)
+    devQ_bert_tokens, devQ_bert_spans = tokenize_each_element(devQ_tokens)
+    
+    #devC_bert_tokens = tokenize(devC_tokens)
     devC_bert_ids = [bert_tokens_to_ids(x) for x in devC_bert_tokens]
-    devQ_bert_tokens = tokenize(devQ_tokens)
+    #devQ_bert_tokens = tokenize(devQ_tokens)
     devQ_bert_ids = [bert_tokens_to_ids(x) for x in devQ_bert_tokens]
 
-    devC_bert_spans = [calc_bert_spans(b, t) for b, t in zip(devC_bert_tokens, devC_tokens)]
-    devQ_bert_spans = [calc_bert_spans(b, t) for b, t in zip(devQ_bert_tokens, devQ_tokens)]
+    #devC_bert_spans = [calc_bert_spans(b, t) for b, t in zip(devC_bert_tokens, devC_tokens)]
+    #devQ_bert_spans = [calc_bert_spans(b, t) for b, t in zip(devQ_bert_tokens, devQ_tokens)]
 
 # tags
 devC_tag_ids = token2id(devC_tags, vocab_tag) # vocab_tag same as training
