@@ -122,7 +122,7 @@ def tokenize_each_element(lis):
         token_spans.append(curr_span)
     return all_tokens, token_spans
 
-def bert_tokenize(lis):
+def bert_tokenize(x):
     global bertTokenizer
     return bertTokenizer.tokenize(x)
 
@@ -225,9 +225,6 @@ if args.use_bert:
     trQ_bert_ids = [bert_tokens_to_ids(x) for x in trQ_bert_tokens]
     #trC_bert_spans = [calc_bert_spans(b, t) for b, t in zip(trC_bert_tokens, trC_tokens)]
     #trQ_bert_spans = [calc_bert_spans(b, t) for b, t in zip(trQ_bert_tokens, trQ_tokens)]
-    
-for x, y in zip(trC_bert_spans, trC_tokens):
-    assert len(x) == len(y)
     
 # tags
 vocab_tag = [''] + list(nlp.tagger.labels)
@@ -420,7 +417,7 @@ if args.use_bert:
 
     #devC_bert_spans = [calc_bert_spans(b, t) for b, t in zip(devC_bert_tokens, devC_tokens)]
     #devQ_bert_spans = [calc_bert_spans(b, t) for b, t in zip(devQ_bert_tokens, devQ_tokens)]
-
+    
 # tags
 devC_tag_ids = token2id(devC_tags, vocab_tag) # vocab_tag same as training
 # entities
