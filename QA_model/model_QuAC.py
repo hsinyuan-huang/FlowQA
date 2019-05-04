@@ -35,7 +35,13 @@ class QAModel(object):
             for k in list(state_dict['network'].keys()):
                 if k not in new_state:
                     del state_dict['network'][k]
-            self.network.load_state_dict(state_dict['network'])
+                elif state_dict['network'][k].shape != self.network.state_dict()[k].shape:
+                    del state_dict['network'][k]
+
+            # Throws keyerror otherwise
+            model_dict = self.network.state_dict()
+            model_dict.update(state_dict['network'])
+            self.network.load_state_dict(model_dict)
 
         parameters = [p for p in self.network.parameters() if p.requires_grad]
         self.total_param = sum([p.nelement() for p in parameters])
