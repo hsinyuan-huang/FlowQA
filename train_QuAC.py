@@ -129,6 +129,7 @@ parser.add_argument('--bert_warmup', type=float, default=-1)
 parser.add_argument('--bert_t_total', type=int, default=-1)
 parser.add_argument('--bert_schedule', type=str, default='warmup_constant')
 parser.add_argument('--bert_stride', type=int, default=constants.BERT_MAXLEN)
+parser.add_argument('--bert_start_idx', type=int, default=6)
 parser.add_argument('--aggregate_grad_steps', type=int, default=3)
 parser.add_argument('--load_optimizer', type=int, default=1)
 

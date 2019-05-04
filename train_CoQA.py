@@ -169,6 +169,7 @@ log.addHandler(fh)
 log.addHandler(ch)
 
 def main():
+    log.info("\n\n\nScores on the dev set are meaningless.\nDev data has been added to train data for pretraining.\nDo not use this script to train CoQA.\n\n\n")
     log.info('[program starts.]')
     log.info('seed: {}'.format(args.seed))
     log.info(str(vars(args)))

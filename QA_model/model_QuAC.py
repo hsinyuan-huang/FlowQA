@@ -44,15 +44,10 @@ class QAModel(object):
             self.network.load_state_dict(model_dict)
 
         parameters = [p for p in self.network.parameters() if p.requires_grad]
-        self.total_param = sum([p.nelement() for p in parameters])
 
         # Building optimizer.
         if opt['finetune_bert'] != 0:
             bert_params = [p for p in self.network.bert.parameters() if p.requires_grad]
-            self.bertadam = BertAdam(bert_params,
-                                     lr=opt['bert_lr'],
-                                     warmup=opt['bert_warmup'],
-                                     t_total=opt['bert_t_total'])
             non_bert_params = []
             for p in parameters:
                 for bp in bert_params:
@@ -61,6 +56,20 @@ class QAModel(object):
                 else:
                     non_bert_params.append(p)
             parameters = non_bert_params
+
+            for n, p in self.network.bert.named_parameters():
+                if n.startswith('embeddings') or n.startswith('pooler'):
+                    p.requires_grad = False
+                    p.requires_grad = False
+                elif opt['bert_start_idx'] and n.startswith('encoder.layer.') and int(n[14]) < opt['bert_start_idx'] and n[15] == '.':
+                    p.requires_grad = False
+
+            self.bertadam = BertAdam([p for p in self.network.bert.parameters() if p.requires_grad],
+                                     lr=opt['bert_lr'],
+                                     warmup=opt['bert_warmup'],
+                                     t_total=opt['bert_t_total'])
+
+        self.total_param = sum([p.nelement() for p in self.network.parameters() if p.requires_grad])
 
         if opt['optimizer'] == 'sgd':
             self.optimizer = optim.SGD(parameters, opt['learning_rate'],
