@@ -176,9 +176,6 @@ class QAModel(object):
             self.bertadam.step()
         self.updates += 1
         '''
-        # Reset any partially fixed parameters (e.g. rare words)
-        self.reset_embeddings()
-        self.eval_embed_transfer = True
         
         return loss
         
@@ -192,6 +189,10 @@ class QAModel(object):
         if self.opt['finetune_bert']:
             self.bertadam.step()
         self.updates += 1
+
+        # Reset any partially fixed parameters (e.g. rare words)
+        self.reset_embeddings()
+        self.eval_embed_transfer = True
         
         # Clear gradients and run backward
         self.optimizer.zero_grad()
