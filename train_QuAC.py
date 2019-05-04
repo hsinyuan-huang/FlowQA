@@ -46,7 +46,7 @@ parser.add_argument('--cuda', type=bool, default=torch.cuda.is_available(),
                     help='whether to use GPU acceleration.')
 # training
 parser.add_argument('-e', '--epoches', type=int, default=30)
-parser.add_argument('-bs', '--batch_size', type=int, default=3)
+parser.add_argument('-bs', '--batch_size', type=int, default=1)
 parser.add_argument('-ebs', '--elmo_batch_size', type=int, default=12)
 parser.add_argument('-rs', '--resume', default='',
                     help='previous model pathname. '
@@ -191,9 +191,9 @@ def main():
             opt = checkpoint['config']
         state_dict = checkpoint['state_dict']
         model = QAModel(opt, train_embedding, state_dict)
-        epoch_0 = 1#checkpoint['epoch'] + 1
-        #  for i in range(checkpoint['epoch']):
-            #  random.shuffle(list(range(len(train))))  # synchronize random seed
+        epoch_0 = checkpoint['epoch'] + 1
+        for i in range(checkpoint['epoch']):
+            random.shuffle(list(range(len(train))))  # synchronize random seed
         if args.reduce_lr:
             lr_decay(model.optimizer, lr_decay=args.reduce_lr)
     else:
