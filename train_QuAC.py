@@ -130,6 +130,7 @@ parser.add_argument('--bert_t_total', type=int, default=-1)
 parser.add_argument('--bert_schedule', type=str, default='warmup_constant')
 parser.add_argument('--bert_stride', type=int, default=constants.BERT_MAXLEN)
 parser.add_argument('--bert_start_idx', type=int, default=6)
+parser.add_argument('--bert_agg_type', type=str, default='mean')
 parser.add_argument('--aggregate_grad_steps', type=int, default=3)
 parser.add_argument('--load_optimizer', type=int, default=1)
 
@@ -190,9 +191,9 @@ def main():
             opt = checkpoint['config']
         state_dict = checkpoint['state_dict']
         model = QAModel(opt, train_embedding, state_dict)
-        epoch_0 = checkpoint['epoch'] + 1
-        for i in range(checkpoint['epoch']):
-            random.shuffle(list(range(len(train))))  # synchronize random seed
+        epoch_0 = 1#checkpoint['epoch'] + 1
+        #  for i in range(checkpoint['epoch']):
+            #  random.shuffle(list(range(len(train))))  # synchronize random seed
         if args.reduce_lr:
             lr_decay(model.optimizer, lr_decay=args.reduce_lr)
     else:

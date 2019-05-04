@@ -172,7 +172,14 @@ class FlowQA(nn.Module):
     def combine_bert_emb(self, emb, span):
         final_emb = []
         for s in span:
-            final_emb.append(emb[s].mean(dim=0, keepdim=True))
+            if self.opt['bert_agg_type'] == 'mean':
+                final_emb.append(emb[s].mean(dim=0, keepdim=True))
+            elif self.opt['bert_agg_type'] == 'median':
+                final_emb.append(emb[s].median(dim=0, keepdim=True)[0])
+            elif self.opt['bert_agg_type'] == 'max':
+                final_emb.append(emb[s].max(dim=0, keepdim=True)[0])
+            else:
+                raise NotImplementedError
         return torch.cat(final_emb, dim=0)
 
     def forward(self, x1, x1_c, x1_f, x1_pos, x1_ner, x1_mask, x2_full, x2_c, x2_full_mask, context_bertidx=None, context_bert_spans=None, question_bertidx=None, question_bert_spans=None):
