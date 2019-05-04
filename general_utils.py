@@ -235,6 +235,8 @@ class BatchGen_CoQA:
         batch_size = self.batch_size
         for batch_i in range((self.context_num + self.batch_size - 1) // self.batch_size):
 
+            erroneous = False
+
             batch_idx = idx_perm[self.batch_size * batch_i: self.batch_size * (batch_i+1)]
 
             context_batch = [self.data['context'][i] for i in batch_idx]
@@ -264,6 +266,8 @@ class BatchGen_CoQA:
 
                 context_bert_spans = []
                 for bspan in context_batch[8]:
+                    if [] in bspan:
+                        erroneous = True
                     context_bert_spans.append(bspan)
 
             # Process Context Named Entity
@@ -311,6 +315,8 @@ class BatchGen_CoQA:
                     if self.use_bert:
                         question_bertidx.append(torch.Tensor(qa_data[id][11]).long())
                         question_bert_spans.append(qa_data[id][12])
+                        if [] in question_bert_spans[-1]:
+                            erroneous = True
 
                 for j in range(len(q_seq), question_num):
                     question_id[i, j, :2] = torch.LongTensor([2, 3])
@@ -369,6 +375,10 @@ class BatchGen_CoQA:
 
             text = list(context_batch[3]) # raw text
             span = list(context_batch[4]) # character span for each words
+
+            if erroneous:
+                yield None
+                continue
 
             if self.gpu: # page locked memory for async data transfer
                 context_id = context_id.pin_memory()

@@ -180,9 +180,6 @@ class QAModel(object):
         self.updates += 1
         '''
 
-        # Reset any partially fixed parameters (e.g. rare words)
-        self.reset_embeddings()
-        self.eval_embed_transfer = True
 
         return loss
 
@@ -196,6 +193,10 @@ class QAModel(object):
         if self.opt['finetune_bert']:
             self.bertadam.step()
         self.updates += 1
+
+        # Reset any partially fixed parameters (e.g. rare words)
+        self.reset_embeddings()
+        self.eval_embed_transfer = True
         
         # Clear gradients and run backward
         self.optimizer.zero_grad()
@@ -329,7 +330,7 @@ class QAModel(object):
             'config': self.opt,
             'epoch': epoch
         }
-        if self.opt['use_bert']:
+        if self.opt['finetune_bert']:
             params['state_dict']['bertadam'] = self.bertadam.state_dict()
         try:
             torch.save(params, filename)

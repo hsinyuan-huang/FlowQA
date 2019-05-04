@@ -131,6 +131,7 @@ parser.add_argument('--bert_schedule', type=str, default='warmup_constant')
 parser.add_argument('--bert_stride', type=int, default=constants.BERT_MAXLEN)
 parser.add_argument('--aggregate_grad_steps', type=int, default=1)
 parser.add_argument('--load_optimizer', type=int, default=1)
+parser.add_argument('--bert_num_layers', type=int, default=4)
 
 args = parser.parse_args()
 assert 0 <= args.bert_stride <= constants.BERT_MAXLEN, "bert stride should be less than or equal to %d" % constants.BERT_MAXLEN
@@ -215,6 +216,8 @@ def main():
         batches = BatchGen_CoQA(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_bert=args.use_bert)
         predictions = []
         for batch in batches:
+            if batch is None:
+                continue
             phrases, noans = model.predict(batch)
             predictions.extend(phrases)
         f1 = CoQAEval.compute_turn_score_seq(predictions)
@@ -240,6 +243,8 @@ def main():
             model.bertadam.zero_grad()
 
         for i, batch in enumerate(batches):
+            if batch is None:
+                continue
             model.update(batch)
             if (i+1) % aggregate_grad_steps == 0 or total_batches == (i+1):
                 # Update the gradients
@@ -255,6 +260,8 @@ def main():
             batches = BatchGen_CoQA(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, precompute_elmo=args.elmo_batch_size // args.batch_size, use_bert=args.use_bert)
             predictions = []
             for batch in batches:
+                if batch is None:
+                    continue
                 phrases = model.predict(batch)
                 predictions.extend(phrases)
             f1 = CoQAEval.compute_turn_score_seq(predictions)
