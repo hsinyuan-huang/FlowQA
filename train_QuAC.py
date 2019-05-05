@@ -134,7 +134,7 @@ parser.add_argument('--bert_agg_type', type=str, default='mean')
 parser.add_argument('--aggregate_grad_steps', type=int, default=3)
 parser.add_argument('--load_optimizer', type=int, default=1)
 parser.add_argument('--use_positional', type=int, default=1)
-parser.add_argument('--max_seq_length', type=int, default=1895)
+parser.add_argument('--max_seq_length', type=int, default=1925)
 parser.add_argument('--positional_emb_dim', type=int, default=15)
 
 args = parser.parse_args()

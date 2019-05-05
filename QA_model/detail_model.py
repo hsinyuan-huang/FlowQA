@@ -18,12 +18,14 @@ class FlowQA(nn.Module):
             print(' ' * 10, "You are using both BERT and ELMo")
             print('#' * 100)
 
-        if opt['use_positional']:
-            self.positional_param = nn.Parameter(torch.randn((opt['max_seq_length'], opt['positional_emb_dim'])))
-
         # Input size to RNN: word emb + char emb + question emb + manual features
         doc_input_size = 0
         que_input_size = 0
+
+        if opt['use_positional']:
+            self.positional_param = nn.Parameter(torch.randn((opt['max_seq_length'], opt['positional_emb_dim'])))
+            doc_input_size += opt['positional_emb_dim']
+            que_input_size += opt['positional_emb_dim']
 
         layers.set_my_dropout_prob(opt['my_dropout_p'])
         layers.set_seq_dropout(opt['do_seq_dropout'])
