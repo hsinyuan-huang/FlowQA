@@ -133,6 +133,9 @@ parser.add_argument('--bert_start_idx', type=int, default=6)
 parser.add_argument('--bert_agg_type', type=str, default='mean')
 parser.add_argument('--aggregate_grad_steps', type=int, default=3)
 parser.add_argument('--load_optimizer', type=int, default=1)
+parser.add_argument('--use_positional', type=int, default=1)
+parser.add_argument('--max_seq_length', type=int, default=1895)
+parser.add_argument('--positional_emb_dim', type=int, default=15)
 
 args = parser.parse_args()
 assert 0 <= args.bert_stride <= constants.BERT_MAXLEN, "bert stride should be less than or equal to %d" % constants.BERT_MAXLEN
@@ -252,7 +255,6 @@ def main():
                 log.info('updates[{0:6}] train loss[{1:.5f}] remaining[{2}]'.format(
                     model.updates, model.train_loss.avg,
                     str((datetime.now() - start) / (i + 1) * (len(batches) - i - 1)).split('.')[0]))
-        
         # eval
         if epoch % args.eval_per_epoch == 0:
             batches = BatchGen_QuAC(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_dialog_act=args.use_dialog_act, precompute_elmo=args.elmo_batch_size // args.batch_size, use_bert=args.use_bert)

@@ -12,10 +12,15 @@ class FlowQA(nn.Module):
     """Network for the FlowQA Module."""
     def __init__(self, opt, embedding=None, padding_idx=0):
         super(FlowQA, self).__init__()
+
         if opt['use_bert'] and opt['use_elmo']:
             print('#' * 100)
             print(' ' * 10, "You are using both BERT and ELMo")
             print('#' * 100)
+
+        if opt['use_positional']:
+            self.positional_param = nn.Parameter(torch.randn((opt['max_seq_length'], opt['positional_emb_dim'])))
+
         # Input size to RNN: word emb + char emb + question emb + manual features
         doc_input_size = 0
         que_input_size = 0
@@ -237,6 +242,19 @@ class FlowQA(nn.Module):
 
         x2 = x2_full.view(-1, x2_full.size(-1))
         x2_mask = x2_full_mask.view(-1, x2_full.size(-1))
+
+
+        if self.opt['use_positional']:
+            bs, context_len = x1.shape
+            x1_positional = self.positional_param[:context_len]
+            x1_positional = x1_positional.repeat(bs, 1, 1)
+
+            _, ques_cnt, ques_len = x2_full.shape
+            x2_positional = self.positional_param[:ques_len]
+            x2_positional = x2_positional.repeat(ques_cnt, 1, 1)
+
+            drnn_input_list.append(x1_positional)
+            qrnn_input_list.append(x2_positional)
 
         if self.opt['use_bert']:
             #  Context BERT
