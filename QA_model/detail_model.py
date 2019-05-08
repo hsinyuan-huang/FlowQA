@@ -5,15 +5,27 @@ import torch.nn.functional as F
 from allennlp.modules.elmo import Elmo
 from allennlp.nn.util import remove_sentence_boundaries
 from . import layers
+from . import constants
+from pytorch_pretrained_bert import BertModel
 
 class FlowQA(nn.Module):
     """Network for the FlowQA Module."""
     def __init__(self, opt, embedding=None, padding_idx=0):
         super(FlowQA, self).__init__()
 
+        if opt['use_bert'] and opt['use_elmo']:
+            print('#' * 100)
+            print(' ' * 10, "You are using both BERT and ELMo")
+            print('#' * 100)
+
         # Input size to RNN: word emb + char emb + question emb + manual features
         doc_input_size = 0
         que_input_size = 0
+
+        if opt['use_positional']:
+            self.positional_param = nn.Parameter(torch.randn((opt['max_seq_length'], opt['positional_emb_dim'])))
+            doc_input_size += opt['positional_emb_dim']
+            que_input_size += opt['positional_emb_dim']
 
         layers.set_my_dropout_prob(opt['my_dropout_p'])
         layers.set_seq_dropout(opt['do_seq_dropout'])
@@ -48,6 +60,23 @@ class FlowQA(nn.Module):
             CoVe_size = self.CoVe.output_size
             doc_input_size += CoVe_size
             que_input_size += CoVe_size
+        else:
+            CoVe_size = 0
+
+        if opt['use_bert']:
+            self.bert = BertModel.from_pretrained(opt['bert_type'])
+            self.bert_stride = opt['bert_stride']
+
+            if opt['finetune_bert'] == 0:
+                self.bert.eval()
+                for layer in self.bert.parameters():
+                    layer.requires_grad = False
+
+            doc_input_size += constants.BERT_EMB_SIZE
+            que_input_size += constants.BERT_EMB_SIZE
+
+            if opt['cuda']:
+                self.bert = self.bert.cuda()
 
         if opt['use_elmo']:
             options_file = "https://s3-us-west-2.amazonaws.com/allennlp/models/elmo/2x4096_512_2048cnn_2xhighway_5.5B/elmo_2x4096_512_2048cnn_2xhighway_5.5B_options.json"
@@ -85,8 +114,12 @@ class FlowQA(nn.Module):
         doc_hidden_size = opt['hidden_size'] * 2
 
         # RNN question encoder
-        self.question_rnn, que_hidden_size = layers.RNN_from_opt(que_hidden_size, opt['hidden_size'], opt,
-        num_layers=2, concat_rnn=opt['concat_rnn'], add_feat=CoVe_size)
+        if opt['CoVe_opt'] > 0:
+            self.question_rnn, que_hidden_size = layers.RNN_from_opt(que_hidden_size, opt['hidden_size'], opt,
+            num_layers=2, concat_rnn=opt['concat_rnn'], add_feat=CoVe_size)
+        else:
+            self.question_rnn, que_hidden_size = layers.RNN_from_opt(que_hidden_size, opt['hidden_size'], opt,
+            num_layers=2, concat_rnn=opt['concat_rnn'])
 
         # Output sizes of rnn encoders
         print('After Input LSTM, the vector_sizes [doc, query] are [', doc_hidden_size, que_hidden_size, '] * 2')
@@ -127,7 +160,36 @@ class FlowQA(nn.Module):
         # Store config
         self.opt = opt
 
-    def forward(self, x1, x1_c, x1_f, x1_pos, x1_ner, x1_mask, x2_full, x2_c, x2_full_mask):
+    def bert_emb(self, tensor):
+        length = tensor.shape[1]
+
+        emb = torch.zeros((*tensor.shape, constants.BERT_EMB_SIZE))
+        if self.opt['cuda']:
+            emb = emb.cuda()
+        counts = torch.zeros(1, length, 1)
+        for i in range(0, length, self.bert_stride):
+            temp = self.bert(tensor[:, i : i + constants.BERT_MAXLEN])[0]
+            emb[:, i : i + constants.BERT_MAXLEN, :] += sum(temp[-self.opt['bert_num_layers']:])
+            counts[:, i : i + constants.BERT_MAXLEN] += 1
+        if self.opt['cuda']:
+            counts = counts.cuda()
+        emb /= counts
+        return emb
+
+    def combine_bert_emb(self, emb, span):
+        final_emb = []
+        for s in span:
+            if self.opt['bert_agg_type'] == 'mean':
+                final_emb.append(emb[s].mean(dim=0, keepdim=True))
+            elif self.opt['bert_agg_type'] == 'median':
+                final_emb.append(emb[s].median(dim=0, keepdim=True)[0])
+            elif self.opt['bert_agg_type'] == 'max':
+                final_emb.append(emb[s].max(dim=0, keepdim=True)[0])
+            else:
+                raise NotImplementedError
+        return torch.cat(final_emb, dim=0)
+
+    def forward(self, x1, x1_c, x1_f, x1_pos, x1_ner, x1_mask, x2_full, x2_c, x2_full_mask, context_bertidx=None, context_bert_spans=None, question_bertidx=None, question_bert_spans=None):
         """Inputs:
         x1 = document word indices             [batch * len_d]
         x1_c = document char indices           [batch * len_d * len_w] or [1]
@@ -183,6 +245,44 @@ class FlowQA(nn.Module):
         x2 = x2_full.view(-1, x2_full.size(-1))
         x2_mask = x2_full_mask.view(-1, x2_full.size(-1))
 
+
+        if self.opt['use_positional']:
+            bs, context_len = x1.shape
+            x1_positional = self.positional_param[:context_len]
+            x1_positional = x1_positional.repeat(bs, 1, 1)
+
+            _, ques_cnt, ques_len = x2_full.shape
+            x2_positional = self.positional_param[:ques_len]
+            x2_positional = x2_positional.repeat(ques_cnt, 1, 1)
+
+            drnn_input_list.append(x1_positional)
+            qrnn_input_list.append(x2_positional)
+
+        if self.opt['use_bert']:
+            #  Context BERT
+            #  0 is '[PAD]' for bert
+            padded_contexts_bertidx = nn.utils.rnn.pad_sequence(context_bertidx, batch_first=True)
+            inter_context_bert_emb = self.bert_emb(padded_contexts_bertidx)
+            context_bert_emb = []
+            for i in range(inter_context_bert_emb.shape[0]):
+                context_bert_emb.append(self.combine_bert_emb(inter_context_bert_emb[i], context_bert_spans[i]))
+            context_bert_emb = nn.utils.rnn.pad_sequence(context_bert_emb, batch_first=True)
+
+            # Question BERT
+            if self.opt['cuda']:
+                padded_ques_bertidx = nn.utils.rnn.pad_sequence(question_bertidx, batch_first=True).cuda()
+            else:
+                padded_ques_bertidx = nn.utils.rnn.pad_sequence(question_bertidx, batch_first=True)
+
+            inter_ques_bert_emb = self.bert_emb(padded_ques_bertidx)
+            ques_bert_emb = []
+            for i in range(inter_ques_bert_emb.shape[0]):
+                ques_bert_emb.append(self.combine_bert_emb(inter_ques_bert_emb[i], question_bert_spans[i]))
+            ques_bert_emb = nn.utils.rnn.pad_sequence(ques_bert_emb, batch_first=True)
+
+            drnn_input_list.append(context_bert_emb)
+            qrnn_input_list.append(ques_bert_emb)
+
         if self.opt['use_wemb']:
             # Word embedding for both document and question
             emb = self.embedding if self.training else self.eval_embed
@@ -236,7 +336,8 @@ class FlowQA(nn.Module):
             return z.unsqueeze(1).expand(z.size(0), x2_full.size(1), z.size(1), z.size(2)).contiguous().view(-1, z.size(1), z.size(2))
 
         x1_emb_expand = expansion_for_doc(x1_emb)
-        x1_cove_high_expand = expansion_for_doc(x1_cove_high)
+        if self.opt['CoVe_opt']:
+            x1_cove_high_expand = expansion_for_doc(x1_cove_high)
         #x1_elmo_expand = expansion_for_doc(x1_elmo)
         if self.opt['no_em']:
             x1_f = x1_f[:, :, :, 3:]
@@ -274,7 +375,10 @@ class FlowQA(nn.Module):
 
         doc_abstr_ls.append(doc_hiddens)
 
-        doc_hiddens = self.doc_rnn2(torch.cat((doc_hiddens, doc_hiddens_flow, x1_cove_high_expand), dim=2), x1_mask)
+        if self.opt['CoVe_opt'] > 0:
+            doc_hiddens = self.doc_rnn2(torch.cat((doc_hiddens, doc_hiddens_flow, x1_cove_high_expand), dim=2), x1_mask)
+        else:
+            doc_hiddens = self.doc_rnn2(torch.cat((doc_hiddens, doc_hiddens_flow), dim=2), x1_mask)
         doc_hiddens_flow = flow_operation(doc_hiddens, self.dialog_flow2)
         doc_abstr_ls.append(doc_hiddens)
 
@@ -284,15 +388,22 @@ class FlowQA(nn.Module):
         #    pass
 
         # Encode question with RNN
-        _, que_abstr_ls = self.question_rnn(x2_input, x2_mask, return_list=True, additional_x=x2_cove_high)
+        if self.opt['CoVe_opt'] > 0:
+            _, que_abstr_ls = self.question_rnn(x2_input, x2_mask, return_list=True, additional_x=x2_cove_high)
+        else:
+            _, que_abstr_ls = self.question_rnn(x2_input, x2_mask, return_list=True)
 
         # Final question layer
         question_hiddens = self.high_lvl_qrnn(torch.cat(que_abstr_ls, 2), x2_mask)
         que_abstr_ls += [question_hiddens]
 
         # Main Attention Fusion Layer
-        doc_info = self.deep_attn([torch.cat([x1_emb_expand, x1_cove_high_expand], 2)], doc_abstr_ls,
-        [torch.cat([x2_emb, x2_cove_high], 2)], que_abstr_ls, x1_mask, x2_mask)
+        if self.opt['CoVe_opt'] > 0:
+            doc_info = self.deep_attn([torch.cat([x1_emb_expand, x1_cove_high_expand], 2)], doc_abstr_ls,
+                [torch.cat([x2_emb, x2_cove_high], 2)], que_abstr_ls, x1_mask, x2_mask)
+        else:
+            doc_info = self.deep_attn([x1_emb_expand], doc_abstr_ls,
+                [x2_emb], que_abstr_ls, x1_mask, x2_mask)
 
         doc_hiddens = self.deep_attn_rnn(torch.cat((doc_info, doc_hiddens_flow), dim=2), x1_mask)
         doc_hiddens_flow = flow_operation(doc_hiddens, self.dialog_flow3)

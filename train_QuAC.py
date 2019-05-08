@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 from QA_model.model_QuAC import QAModel
 from general_utils import find_best_score_and_thresh, BatchGen_QuAC
+from QA_model import constants
 
 parser = argparse.ArgumentParser(
     description='Train a Dialog QA model.'
@@ -45,7 +46,7 @@ parser.add_argument('--cuda', type=bool, default=torch.cuda.is_available(),
                     help='whether to use GPU acceleration.')
 # training
 parser.add_argument('-e', '--epoches', type=int, default=30)
-parser.add_argument('-bs', '--batch_size', type=int, default=3)
+parser.add_argument('-bs', '--batch_size', type=int, default=1)
 parser.add_argument('-ebs', '--elmo_batch_size', type=int, default=12)
 parser.add_argument('-rs', '--resume', default='',
                     help='previous model pathname. '
@@ -117,12 +118,34 @@ parser.add_argument('--my_dropout_p', type=float, default=0.4)
 parser.add_argument('--dropout_emb', type=float, default=0.4)
 
 parser.add_argument('--max_len', type=int, default=35)
+parser.add_argument('--use_bert', type=int, default=1,
+                            help='pass 1 to use bert')
+parser.add_argument('--finetune_bert', type=int, default=1,
+                            help='pass 1 to finetune bert')
+parser.add_argument('--bert_type', type=str, default='bert-base-uncased')
+parser.add_argument('--bert_num_layers', type=int, default=4)
+parser.add_argument('--bert_lr', type=float, default=1e-5)
+parser.add_argument('--bert_warmup', type=float, default=-1)
+parser.add_argument('--bert_t_total', type=int, default=-1)
+parser.add_argument('--bert_schedule', type=str, default='warmup_constant')
+parser.add_argument('--bert_stride', type=int, default=constants.BERT_MAXLEN)
+parser.add_argument('--bert_start_idx', type=int, default=6)
+parser.add_argument('--bert_agg_type', type=str, default='mean')
+parser.add_argument('--aggregate_grad_steps', type=int, default=3)
+parser.add_argument('--load_optimizer', type=int, default=1)
+parser.add_argument('--use_positional', type=int, default=1)
+parser.add_argument('--max_seq_length', type=int, default=1925)
+parser.add_argument('--positional_emb_dim', type=int, default=15)
 
 args = parser.parse_args()
+assert 0 <= args.bert_stride <= constants.BERT_MAXLEN, "bert stride should be less than or equal to %d" % constants.BERT_MAXLEN
 
 if args.name != '':
     args.model_dir = args.model_dir + '_' + args.name
     args.log_file = os.path.dirname(args.log_file) + 'output_' + args.name + '.log'
+
+if args.bert_lr == 0 or args.use_bert == 0:
+    args.finetune_bert = 0
 
 # set model dir
 model_dir = args.model_dir
@@ -151,6 +174,8 @@ log.addHandler(ch)
 
 def main():
     log.info('[program starts.]')
+    log.info('seed: {}'.format(args.seed))
+    log.info(str(vars(args)))
     opt = vars(args) # changing opt will change args
     train, train_embedding, opt = load_train_data(opt)
     dev, dev_embedding, dev_answer = load_dev_data(opt)
@@ -161,7 +186,10 @@ def main():
 
     if args.resume:
         log.info('[loading previous model...]')
-        checkpoint = torch.load(args.resume)
+        if args.cuda:
+            checkpoint = torch.load(args.resume, map_location={'cpu': 'cuda:0'})
+        else:
+            checkpoint = torch.load(args.resume, map_location={'cuda:0': 'cpu'})
         if args.resume_options:
             opt = checkpoint['config']
         state_dict = checkpoint['state_dict']
@@ -188,7 +216,7 @@ def main():
         model.cuda()
 
     if args.resume:
-        batches = BatchGen_QuAC(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_dialog_act=args.use_dialog_act)
+        batches = BatchGen_QuAC(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_dialog_act=args.use_dialog_act, use_bert=args.use_bert)
         predictions, no_ans_scores = [], []
         for batch in batches:
             phrases, noans = model.predict(batch)
@@ -199,22 +227,37 @@ def main():
         best_val_score, best_na, best_thresh = f1, na, thresh
     else:
         best_val_score, best_na, best_thresh = 0.0, 0.0, 0.0
+    
+    aggregate_grad_steps = 1
+    if opt['use_bert']:
+        aggregate_grad_steps = opt['aggregate_grad_steps']
 
     for epoch in range(epoch_0, epoch_0 + args.epoches):
+
         log.warning('Epoch {}'.format(epoch))
         # train
-        batches = BatchGen_QuAC(train, batch_size=args.batch_size, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_dialog_act=args.use_dialog_act, precompute_elmo=args.elmo_batch_size // args.batch_size)
+        batches = BatchGen_QuAC(train, batch_size=args.batch_size, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_dialog_act=args.use_dialog_act, precompute_elmo=args.elmo_batch_size // args.batch_size, use_bert=args.use_bert)
         start = datetime.now()
+        
+        total_batches = len(batches)
+        loss = 0
+        model.optimizer.zero_grad()
+        if opt['finetune_bert']:
+            model.bertadam.zero_grad()
+        
         for i, batch in enumerate(batches):
-            model.update(batch)
+            loss += model.update(batch)
+            if (i+1) % aggregate_grad_steps == 0 or total_batches == (i+1):
+                # Update the gradients
+                model.take_step()
+                loss = 0
             if i % args.log_per_updates == 0:
                 log.info('updates[{0:6}] train loss[{1:.5f}] remaining[{2}]'.format(
                     model.updates, model.train_loss.avg,
                     str((datetime.now() - start) / (i + 1) * (len(batches) - i - 1)).split('.')[0]))
-        
         # eval
         if epoch % args.eval_per_epoch == 0:
-            batches = BatchGen_QuAC(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_dialog_act=args.use_dialog_act, precompute_elmo=args.elmo_batch_size // args.batch_size)
+            batches = BatchGen_QuAC(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda, dialog_ctx=args.explicit_dialog_ctx, use_dialog_act=args.use_dialog_act, precompute_elmo=args.elmo_batch_size // args.batch_size, use_bert=args.use_bert)
             predictions, no_ans_scores = [], []
             for batch in batches:
                 phrases, noans = model.predict(batch)
@@ -258,26 +301,51 @@ def load_train_data(opt):
     #data_orig = pd.read_csv(os.path.join(args.train_dir, 'train.csv'))
 
     opt['num_features'] = len(data['context_features'][0][0])
-
-    train = {'context': list(zip(
-                        data['context_ids'],
-                        data['context_tags'],
-                        data['context_ents'],
-                        data['context'],
-                        data['context_span'],
-                        data['1st_question'],
-                        data['context_tokenized'])),
-             'qa': list(zip(
-                        data['question_CID'],
-                        data['question_ids'],
-                        data['context_features'],
-                        data['answer_start'],
-                        data['answer_end'],
-                        data['answer_choice'],
-                        data['question'],
-                        data['answer'],
-                        data['question_tokenized']))
-            }
+    
+    if opt['use_bert']:
+        train = {'context': list(zip(
+                            data['context_ids'],
+                            data['context_tags'],
+                            data['context_ents'],
+                            data['context'],
+                            data['context_span'],
+                            data['1st_question'],
+                            data['context_tokenized'],
+                            data['context_bertidx'],
+                            data['context_bert_spans'])),
+                 'qa': list(zip(
+                            data['question_CID'],
+                            data['question_ids'],
+                            data['context_features'],
+                            data['answer_start'],
+                            data['answer_end'],
+                            data['answer_choice'],
+                            data['question'],
+                            data['answer'],
+                            data['question_tokenized'],
+                            data['question_bertidx'],
+                            data['question_bert_spans']))
+                }
+    else:
+        train = {'context': list(zip(
+                            data['context_ids'],
+                            data['context_tags'],
+                            data['context_ents'],
+                            data['context'],
+                            data['context_span'],
+                            data['1st_question'],
+                            data['context_tokenized'])),
+                 'qa': list(zip(
+                            data['question_CID'],
+                            data['question_ids'],
+                            data['context_features'],
+                            data['answer_start'],
+                            data['answer_end'],
+                            data['answer_choice'],
+                            data['question'],
+                            data['answer'],
+                            data['question_tokenized']))
+                }
     return train, embedding, opt
 
 def load_dev_data(opt): # can be extended to true test set
@@ -292,25 +360,50 @@ def load_dev_data(opt): # can be extended to true test set
 
     assert opt['num_features'] == len(data['context_features'][0][0])
 
-    dev = {'context': list(zip(
-                        data['context_ids'],
-                        data['context_tags'],
-                        data['context_ents'],
-                        data['context'],
-                        data['context_span'],
-                        data['1st_question'],
-                        data['context_tokenized'])),
-           'qa': list(zip(
-                        data['question_CID'],
-                        data['question_ids'],
-                        data['context_features'],
-                        data['answer_start'],
-                        data['answer_end'],
-                        data['answer_choice'],
-                        data['question'],
-                        data['answer'],
-                        data['question_tokenized']))
-          }
+    if opt['use_bert']:
+        dev = {'context': list(zip(
+                            data['context_ids'],
+                            data['context_tags'],
+                            data['context_ents'],
+                            data['context'],
+                            data['context_span'],
+                            data['1st_question'],
+                            data['context_tokenized'],
+                            data['context_bertidx'],
+                            data['context_bert_spans'])),
+               'qa': list(zip(
+                            data['question_CID'],
+                            data['question_ids'],
+                            data['context_features'],
+                            data['answer_start'],
+                            data['answer_end'],
+                            data['answer_choice'],
+                            data['question'],
+                            data['answer'],
+                            data['question_tokenized'],
+                            data['question_bertidx'],
+                            data['question_bert_spans']))
+              }
+    else:
+        dev = {'context': list(zip(
+                            data['context_ids'],
+                            data['context_tags'],
+                            data['context_ents'],
+                            data['context'],
+                            data['context_span'],
+                            data['1st_question'],
+                            data['context_tokenized'])),
+               'qa': list(zip(
+                            data['question_CID'],
+                            data['question_ids'],
+                            data['context_features'],
+                            data['answer_start'],
+                            data['answer_end'],
+                            data['answer_choice'],
+                            data['question'],
+                            data['answer'],
+                            data['question_tokenized']))
+              }
 
     dev_answer = []
     for i, CID in enumerate(data['question_CID']):
