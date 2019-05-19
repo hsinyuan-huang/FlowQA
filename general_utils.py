@@ -563,15 +563,22 @@ class BatchGen_QuAC:
             answer_c = torch.LongTensor(batch_size, question_num).fill_(0)
             overall_mask = torch.ByteTensor(batch_size, question_num).fill_(0)
             question, answer = [], []
+            qids = []
             for i, q_seq in enumerate(question_batch):
                 question_pack, answer_pack = [], []
+                qid_pack = []
                 for j, id in enumerate(q_seq):
                     answer_s[i, j], answer_e[i, j], answer_c[i, j] = qa_data[id][3], qa_data[id][4], qa_data[id][5]
                     overall_mask[i, j] = 1
                     question_pack.append(qa_data[id][6])
                     answer_pack.append(qa_data[id][7])
+                    if self.use_bert:
+                        qid_pack.append(qa_data[id][11])
+                    else:
+                        qid_pack.append(qa_data[id][9])
                 question.append(question_pack)
                 answer.append(answer_pack)
+                qids.append(qid_pack)
 
             # Process Masks
             context_mask = torch.eq(context_id, 0)
@@ -601,12 +608,12 @@ class BatchGen_QuAC:
                 yield (context_id, context_cid, context_feature, context_tag, context_ent, context_mask,
                        question_id, question_cid, question_mask, overall_mask,
                        answer_s, answer_e, answer_c,
-                       text, span, question, answer, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans)
+                       text, span, question, answer, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans, qids)
             else:
                 yield (context_id, context_cid, context_feature, context_tag, context_ent, context_mask,
                        question_id, question_cid, question_mask, overall_mask,
                        answer_s, answer_e, answer_c,
-                       text, span, question, answer)
+                       text, span, question, answer, qids)
 
 #===========================================================================
 #========================== For QuAC evaluation ============================

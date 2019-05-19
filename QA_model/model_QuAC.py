@@ -105,7 +105,7 @@ class QAModel(object):
         else:
             wvec_size = (opt['vocab_size'] - opt['tune_partial']) * opt['embedding_dim']
 
-    def update(self, batch, weight_class=3, weight_loss=2):
+    def update(self, batch):
         # Train mode
         self.network.train()
         torch.set_grad_enabled(True)
@@ -161,15 +161,13 @@ class QAModel(object):
             target_c = answer_c[i, :q_num]
             target_no_answ = all_no_answ[i, :q_num]
 
-            wc = target_no_answ.float() * (weight_class - 1) + 1
-
             # single_loss is averaged across q_num
             if self.opt['question_normalize']:
-                single_loss = weight_loss * F.binary_cross_entropy_with_logits(score_no_answ[i, :q_num], target_no_answ.float(), weight=wc) * q_num.item() / 8.0
+                single_loss = F.binary_cross_entropy_with_logits(score_no_answ[i, :q_num], target_no_answ.float()) * q_num.item() / 8.0
                 single_loss = single_loss + F.cross_entropy(score_s[i, :q_num], target_s) * (q_num - sum(target_no_answ)).item() / 7.0
                 single_loss = single_loss + F.cross_entropy(score_e[i, :q_num], target_e) * (q_num - sum(target_no_answ)).item() / 7.0
             else:
-                single_loss = weight_loss * F.binary_cross_entropy_with_logits(score_no_answ[i, :q_num], target_no_answ.float(), weight=wc) \
+                single_loss = F.binary_cross_entropy_with_logits(score_no_answ[i, :q_num], target_no_answ.float()) \
                             + F.cross_entropy(score_s[i, :q_num], target_s) + F.cross_entropy(score_e[i, :q_num], target_e)
 
             loss = loss + (single_loss / overall_mask.size(0))
