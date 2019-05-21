@@ -201,8 +201,49 @@ def preprocess_data(dev_file):
 
     return meta, result
 
+def load_dev_data(meta, data): # can be extended to true test set
+    embedding = torch.Tensor(meta['embedding'])
+
+    #data_orig = pd.read_csv(os.path.join(args.dev_dir, 'dev.csv'))
+
+    dev = {'context': list(zip(
+                        data['context_ids'],
+                        data['context_tags'],
+                        data['context_ents'],
+                        data['context'],
+                        data['context_span'],
+                        data['1st_question'],
+                        data['context_tokenized'],
+                        data['context_bertidx'],
+                        data['context_bert_spans'])),
+           'qa': list(zip(
+                        data['question_CID'],
+                        data['question_ids'],
+                        data['context_features'],
+                        data['answer_start'],
+                        data['answer_end'],
+                        data['answer_choice'],
+                        data['question'],
+                        data['answer'],
+                        data['question_tokenized'],
+                        data['question_bertidx'],
+                        data['question_bert_spans'],
+                        data['qids']))
+          }
+
+    dev_answer = []
+    for i, CID in enumerate(data['question_CID']):
+        if len(dev_answer) <= CID:
+            dev_answer.append([])
+        dev_answer[CID].append(data['all_answer'][i])
+
+    return dev, embedding, dev_answer
+
+
 def main():
-    meta, dev = preprocess_data(args.i)
+    meta, test = preprocess_data(args.i)
+    test, test_embedding, test_answer = load_dev_data(meta, test)
+    checkpoint = torch.load('best_model.pt')
 
 if __name__ == '__main__':
     main()
