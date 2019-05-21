@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import numpy as np
 import logging
 
+from pytorch_pretrained_bert.optimization import BertAdam
+
 from torch.nn import Parameter
 from torch.autograd import Variable
 from .utils import AverageMeter
@@ -33,10 +35,42 @@ class QAModel(object):
             for k in list(state_dict['network'].keys()):
                 if k not in new_state:
                     del state_dict['network'][k]
-            self.network.load_state_dict(state_dict['network'])
+                elif state_dict['network'][k].shape != self.network.state_dict()[k].shape:
+                    del state_dict['network'][k]
+
+            # Throws keyerror otherwise
+            model_dict = self.network.state_dict()
+            model_dict.update(state_dict['network'])
+            self.network.load_state_dict(model_dict)
+
+        parameters = [p for p in self.network.parameters() if p.requires_grad]
 
         # Building optimizer.
-        parameters = [p for p in self.network.parameters() if p.requires_grad]
+        if opt['finetune_bert'] != 0:
+            bert_params = [p for p in self.network.bert.parameters() if p.requires_grad]
+            non_bert_params = []
+            for p in parameters:
+                for bp in bert_params:
+                    if p is bp:
+                        break
+                else:
+                    non_bert_params.append(p)
+            parameters = non_bert_params
+
+            for n, p in self.network.bert.named_parameters():
+                if n.startswith('embeddings') or n.startswith('pooler'):
+                    p.requires_grad = False
+                    p.requires_grad = False
+                elif opt['bert_start_idx'] and n.startswith('encoder.layer.') and int(n[14]) < opt['bert_start_idx'] and n[15] == '.':
+                    p.requires_grad = False
+
+            self.bertadam = BertAdam([p for p in self.network.bert.parameters() if p.requires_grad],
+                                     lr=opt['bert_lr'],
+                                     warmup=opt['bert_warmup'],
+                                     t_total=opt['bert_t_total'])
+
+        self.total_param = sum([p.nelement() for p in self.network.parameters() if p.requires_grad])
+
         if opt['optimizer'] == 'sgd':
             self.optimizer = optim.SGD(parameters, opt['learning_rate'],
                                        momentum=opt['momentum'],
@@ -46,21 +80,41 @@ class QAModel(object):
                                           weight_decay=opt['weight_decay'])
         elif opt['optimizer'] == 'adadelta':
             self.optimizer = optim.Adadelta(parameters, rho=0.95, weight_decay=opt['weight_decay'])
+        elif opt['optimizer'] == 'adam':
+            self.optimizer = optim.Adam(parameters, lr=2e-3, amsgrad=True, weight_decay=opt['weight_decay'])
         else:
             raise RuntimeError('Unsupported optimizer: %s' % opt['optimizer'])
-        if state_dict:
+        if state_dict and opt['load_optimizer']:
             self.optimizer.load_state_dict(state_dict['optimizer'])
+            if opt['cuda']:
+                for state in self.optimizer.state.values():
+                    for k, v in state.items():
+                        if isinstance(v, torch.Tensor):
+                            state[k] = v.cuda()
+
+            if opt['finetune_bert'] != 0 and 'bertadam' in state_dict:
+                self.bertadam.load_state_dict(state_dict['bertadam'])
+                if opt['cuda']:
+                    for state in self.bertadam.state.values():
+                        for k, v in state.items():
+                            if isinstance(v, torch.Tensor):
+                                state[k] = v.cuda()
 
         if opt['fix_embeddings']:
             wvec_size = 0
         else:
             wvec_size = (opt['vocab_size'] - opt['tune_partial']) * opt['embedding_dim']
-        self.total_param = sum([p.nelement() for p in parameters]) - wvec_size
 
     def update(self, batch):
         # Train mode
         self.network.train()
         torch.set_grad_enabled(True)
+        
+        if self.opt['use_bert']:
+            context_bertidx = batch[17]
+            context_bert_spans = batch[18]
+            question_bertidx = batch[19]
+            question_bert_spans = batch[20]
 
         # Transfer to GPU
         if self.opt['cuda']:
@@ -70,6 +124,9 @@ class QAModel(object):
             answer_s = batch[10].cuda(non_blocking=True)
             answer_e = batch[11].cuda(non_blocking=True)
             answer_c = batch[12].cuda(non_blocking=True)
+
+            if self.opt['use_bert']:
+                context_bertidx = [x.cuda(non_blocking=True) for x in context_bertidx]
         else:
             inputs = [e for e in batch[:9]]
             overall_mask = batch[9]
@@ -80,12 +137,18 @@ class QAModel(object):
 
         # Run forward
         # output: [batch_size, question_num, context_len], [batch_size, question_num]
-        score_s, score_e, score_no_answ = self.network(*inputs)
+        if self.opt['use_bert']:
+            score_s, score_e, score_no_answ = self.network(*inputs, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans)
+        else:
+            score_s, score_e, score_no_answ = self.network(*inputs)
 
         # Compute loss and accuracies
-        loss = self.opt['elmo_lambda'] * (self.network.elmo.scalar_mix_0.scalar_parameters[0] ** 2
+        if self.opt['use_elmo']:
+            loss = self.opt['elmo_lambda'] * (self.network.elmo.scalar_mix_0.scalar_parameters[0] ** 2
                                         + self.network.elmo.scalar_mix_0.scalar_parameters[1] ** 2
                                         + self.network.elmo.scalar_mix_0.scalar_parameters[2] ** 2) # ELMo L2 regularization
+        else:
+            loss = 0
         all_no_answ = (answer_c == 0)
         answer_s.masked_fill_(all_no_answ, -100) # ignore_index is -100 in F.cross_entropy
         answer_e.masked_fill_(all_no_answ, -100)
@@ -110,21 +173,48 @@ class QAModel(object):
             loss = loss + (single_loss / overall_mask.size(0))
         self.train_loss.update(loss.item(), overall_mask.size(0))
 
+        '''
         # Clear gradients and run backward
         self.optimizer.zero_grad()
+        if self.opt['finetune_bert']:
+            self.bertadam.zero_grad()
+        '''
+        loss = loss/self.opt['aggregate_grad_steps']
         loss.backward()
 
+        '''
         # Clip gradients
         torch.nn.utils.clip_grad_norm_(self.network.parameters(),
                                        self.opt['grad_clipping'])
-
+        
         # Update parameters
         self.optimizer.step()
+        if self.opt['finetune_bert']:
+            self.bertadam.step()
+        self.updates += 1
+        '''
+        
+        return loss
+        
+    def take_step(self):
+        # Clip Gradients
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(),
+                                       self.opt['grad_clipping'])
+        
+        # Update parameters
+        self.optimizer.step()
+        if self.opt['finetune_bert']:
+            self.bertadam.step()
         self.updates += 1
 
         # Reset any partially fixed parameters (e.g. rare words)
         self.reset_embeddings()
         self.eval_embed_transfer = True
+        
+        # Clear gradients and run backward
+        self.optimizer.zero_grad()
+        if self.opt['finetune_bert']:
+            self.bertadam.zero_grad()
 
     def predict(self, batch, No_Ans_Threshold=None):
         # Eval mode
@@ -136,15 +226,26 @@ class QAModel(object):
             self.update_eval_embed()
             self.eval_embed_transfer = False
 
+        if self.opt['use_bert']:
+            context_bertidx = batch[17]
+            context_bert_spans = batch[18]
+            question_bertidx = batch[19]
+            question_bert_spans = batch[20]
+
         # Transfer to GPU
         if self.opt['cuda']:
             inputs = [e.cuda(non_blocking=True) for e in batch[:9]]
+            if self.opt['use_bert']:
+                context_bertidx = [x.cuda(non_blocking=True) for x in context_bertidx]
         else:
             inputs = [e for e in batch[:9]]
 
         # Run forward
         # output: [batch_size, question_num, context_len], [batch_size, question_num]
-        score_s, score_e, score_no_answ = self.network(*inputs)
+        if self.opt['use_bert']:
+            score_s, score_e, score_no_answ = self.network(*inputs, context_bertidx, context_bert_spans, question_bertidx, question_bert_spans)
+        else:
+            score_s, score_e, score_no_answ = self.network(*inputs)
         score_s = F.softmax(score_s, dim=2)
         score_e = F.softmax(score_e, dim=2)
 
@@ -242,6 +343,8 @@ class QAModel(object):
             'config': self.opt,
             'epoch': epoch
         }
+        if self.opt['finetune_bert']:
+            params['state_dict']['bertadam'] = self.bertadam.state_dict()
         try:
             torch.save(params, filename)
             logger.info('model saved to {}'.format(filename))

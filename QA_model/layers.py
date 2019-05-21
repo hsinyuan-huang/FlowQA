@@ -13,6 +13,13 @@ from torch.nn.utils.rnn import pack_padded_sequence as pack
 # Neural Modules
 # ------------------------------------------------------------------------------
 
+def do_kaiming_init(layer):
+    for x in layer.parameters():
+        if len(x.shape) < 2:
+            nn.init.constant_(x, 0)
+        else:
+            nn.init.kaiming_normal_(x, mode='fan_out', nonlinearity='relu')
+
 def set_seq_dropout(option): # option = True or False
     global do_seq_dropout
     do_seq_dropout = option
@@ -53,7 +60,9 @@ class StackedBRNN(nn.Module):
             input_size = input_size if i == 0 else (2 * hidden_size + add_feat if i == 1 else 2 * hidden_size)
             if self.dialog_flow == True:
                 input_size += 2 * hidden_size
-            self.rnns.append(rnn_type(input_size, hidden_size,num_layers=1,bidirectional=bidir))
+            rnn = rnn_type(input_size, hidden_size,num_layers=1,bidirectional=bidir)
+            do_kaiming_init(rnn)
+            self.rnns.append(rnn)
 
     def forward(self, x, x_mask=None, return_list=False, additional_x=None, previous_hiddens=None):
         # return_list: return a list for layers of hidden vectors
@@ -120,6 +129,7 @@ class MemoryLasagna_Time(nn.Module):
         RNN_TYPES = {'lstm': nn.LSTMCell, 'gru': nn.GRUCell}
 
         self.rnn = RNN_TYPES[rnn_type](input_size, hidden_size)
+        do_kaiming_init(self.rnn)
         self.rnn_type = rnn_type
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -224,6 +234,7 @@ class AttentionScore(nn.Module):
     def __init__(self, input_size, attention_hidden_size, similarity_score = False):
         super(AttentionScore, self).__init__()
         self.linear = nn.Linear(input_size, attention_hidden_size, bias=False)
+        do_kaiming_init(self.linear)
 
         if similarity_score:
             self.linear_final = Parameter(torch.ones(1, 1, 1) / (attention_hidden_size ** 0.5), requires_grad = False)
@@ -311,6 +322,7 @@ class DeepAttention(nn.Module):
         self.att_final_size = rnn_input_size
         if not self.no_rnn:
             self.rnn, self.output_size = RNN_from_opt(rnn_input_size, opt['hidden_size'], opt, num_layers=1, dialog_flow=dialog_flow)
+            do_kaiming_init(self.rnn)
         #print('Deep attention x {}: Each with {} rays in {}-dim space'.format(abstr_list_cnt, deep_att_hidden_size_per_abstr, att_size))
         #print('Deep attention RNN input {} -> output {}'.format(self.rnn_input_size, self.output_size))
 
@@ -349,6 +361,7 @@ class LinearSelfAttn(nn.Module):
     def __init__(self, input_size):
         super(LinearSelfAttn, self).__init__()
         self.linear = nn.Linear(input_size, 1)
+        do_kaiming_init(self.linear)
 
     def forward(self, x, x_mask):
         """
@@ -372,6 +385,7 @@ class BilinearSeqAttn(nn.Module):
         super(BilinearSeqAttn, self).__init__()
         if not identity:
             self.linear = nn.Linear(y_size, x_size)
+            do_kaiming_init(self.linear)
         else:
             self.linear = None
 
@@ -398,6 +412,7 @@ class GetSpanStartEnd(nn.Module):
         self.attn2 = BilinearSeqAttn(x_size, h_size, opt) if do_indep_attn else None
 
         self.rnn = nn.GRUCell(x_size, h_size) if do_ptr_update else None
+        do_kaiming_init(self.rnn)
 
     def forward(self, x, h0, x_mask):
         """
@@ -426,6 +441,7 @@ class BilinearLayer(nn.Module):
     def __init__(self, x_size, y_size, class_num):
         super(BilinearLayer, self).__init__()
         self.linear = nn.Linear(y_size, x_size * class_num)
+        do_kaiming_init(self.linear)
         self.class_num = class_num
 
     def forward(self, x, y):
